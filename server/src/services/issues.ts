@@ -78,6 +78,7 @@ import {
   RECOVERY_ORIGIN_KINDS,
 } from "./recovery/origins.js";
 import { classifyIssueGraphLiveness, type IssueLivenessFinding } from "./recovery/issue-graph-liveness.js";
+import { isActiveTimerFollowupIssueStatus } from "./issue-timer-followups.js";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
@@ -4393,6 +4394,16 @@ export function issueService(db: Db) {
         patch.executionRunId = null;
         patch.executionAgentNameKey = null;
         patch.executionLockedAt = null;
+      }
+      const nextStatus = issueData.status ?? existing.status;
+      const assigneeAgentChanged =
+        issueData.assigneeAgentId !== undefined && issueData.assigneeAgentId !== existing.assigneeAgentId;
+      const statusReactivatedForAgent =
+        !isActiveTimerFollowupIssueStatus(existing.status) &&
+        isActiveTimerFollowupIssueStatus(nextStatus) &&
+        Boolean(nextAssigneeAgentId);
+      if (assigneeAgentChanged || statusReactivatedForAgent) {
+        patch.timerFollowupState = null;
       }
 
       const runUpdate = async (tx: any) => {
