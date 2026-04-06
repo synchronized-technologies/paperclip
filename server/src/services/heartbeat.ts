@@ -1033,6 +1033,7 @@ interface WakeupOptions {
   requestedByActorType?: "user" | "agent" | "system";
   requestedByActorId?: string | null;
   contextSnapshot?: Record<string, unknown>;
+  startQueuedRun?: boolean;
 }
 
 type UsageTotals = {
@@ -8702,6 +8703,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}) {
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
+    const startQueuedRun = opts.startQueuedRun ?? true;
     const contextSnapshot: Record<string, unknown> = { ...(opts.contextSnapshot ?? {}) };
     const reason = opts.reason ?? null;
     const payload = opts.payload ?? null;
@@ -9395,7 +9397,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         },
       });
 
-      await startNextQueuedRunForAgent(agent.id);
+      if (startQueuedRun) {
+        await startNextQueuedRunForAgent(agent.id);
+      }
       return newRun;
     }
 
@@ -9515,7 +9519,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       },
     });
 
-    await startNextQueuedRunForAgent(agent.id);
+    if (startQueuedRun) {
+      await startNextQueuedRunForAgent(agent.id);
+    }
 
     return newRun;
   }
@@ -10014,11 +10020,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     buildRunOutputSilence,
 
-    tickTimers: async (now = new Date()) => {
+    tickTimers: async (now = new Date(), opts: { startQueuedRuns?: boolean } = {}) => {
       const allAgents = await db.select().from(agents);
       let checked = 0;
       let enqueued = 0;
       let skipped = 0;
+      const startQueuedRuns = opts.startQueuedRuns ?? true;
 
       for (const agent of allAgents) {
         if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") continue;
@@ -10059,6 +10066,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               reason: "interval_elapsed",
               now: now.toISOString(),
             },
+            startQueuedRun: startQueuedRuns,
           });
           if (run) {
             enqueued += 1;

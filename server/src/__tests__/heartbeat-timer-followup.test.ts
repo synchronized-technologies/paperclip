@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   agents,
-  agentRuntimeState,
-  agentWakeupRequests,
   companies,
   createDb,
   heartbeatRuns,
@@ -42,12 +40,7 @@ describeEmbeddedPostgres("heartbeat timer follow-up guard", () => {
   }, 20_000);
 
   afterEach(async () => {
-    await db.delete(issues);
-    await db.delete(heartbeatRuns);
-    await db.delete(agentWakeupRequests);
-    await db.delete(agentRuntimeState);
-    await db.delete(agents);
-    await db.delete(companies);
+    await db.execute(sql`TRUNCATE TABLE "companies" RESTART IDENTITY CASCADE`);
   });
 
   afterAll(async () => {
@@ -110,7 +103,7 @@ describeEmbeddedPostgres("heartbeat timer follow-up guard", () => {
     });
     const heartbeat = heartbeatService(db);
 
-    const result = await heartbeat.tickTimers(now);
+    const result = await heartbeat.tickTimers(now, { startQueuedRuns: false });
     expect(result.enqueued).toBe(0);
 
     const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
@@ -121,7 +114,7 @@ describeEmbeddedPostgres("heartbeat timer follow-up guard", () => {
     const { now, issueId, agentId } = await seedAgentWithIssue();
     const heartbeat = heartbeatService(db);
 
-    const result = await heartbeat.tickTimers(now);
+    const result = await heartbeat.tickTimers(now, { startQueuedRuns: false });
     expect(result.enqueued).toBe(1);
 
     const [run] = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
@@ -148,7 +141,7 @@ describeEmbeddedPostgres("heartbeat timer follow-up guard", () => {
     });
     const heartbeat = heartbeatService(db);
 
-    const result = await heartbeat.tickTimers(now);
+    const result = await heartbeat.tickTimers(now, { startQueuedRuns: false });
     expect(result.enqueued).toBe(0);
 
     const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
@@ -168,7 +161,7 @@ describeEmbeddedPostgres("heartbeat timer follow-up guard", () => {
     });
     const heartbeat = heartbeatService(db);
 
-    const result = await heartbeat.tickTimers(now);
+    const result = await heartbeat.tickTimers(now, { startQueuedRuns: false });
     expect(result.enqueued).toBe(1);
 
     const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
@@ -194,7 +187,7 @@ describeEmbeddedPostgres("heartbeat timer follow-up guard", () => {
     });
     const heartbeat = heartbeatService(db);
 
-    const result = await heartbeat.tickTimers(now);
+    const result = await heartbeat.tickTimers(now, { startQueuedRuns: false });
     expect(result.enqueued).toBe(0);
 
     const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
