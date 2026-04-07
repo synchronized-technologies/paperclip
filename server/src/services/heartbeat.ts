@@ -112,6 +112,7 @@ import {
   getIssueContinuationSummaryDocument,
   refreshIssueContinuationSummary,
 } from "./issue-continuation-summary.js";
+import { triggerQaForPreviewUrl } from "./qa-preview-orchestration.js";
 import { executionWorkspaceService, mergeExecutionWorkspaceConfig } from "./execution-workspaces.js";
 import { workspaceOperationService } from "./workspace-operations.js";
 import { isProcessGroupAlive, terminateLocalService } from "./local-service-supervisor.js";
@@ -7890,6 +7891,29 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             await onLog(
               "stderr",
               `[paperclip] Failed to post adapter-managed runtime comment: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+          }
+
+          // When adapter returns preview runtime services, trigger QA agents.
+          const previewService = adapterManagedRuntimeServices.find(
+            (svc) => svc.serviceName.startsWith("preview") && svc.url,
+          );
+          if (previewService?.url) {
+            void triggerQaForPreviewUrl(
+              {
+                listAgents: async (companyId) => {
+                  const rows = await db.select().from(agents).where(eq(agents.companyId, companyId));
+                  return rows.map((r) => ({ id: r.id, role: r.role, status: r.status }));
+                },
+                wakeup,
+              },
+              {
+                companyId: agent.companyId,
+                issueId,
+                previewUrl: previewService.url,
+                runtimeServiceName: previewService.serviceName,
+                producerAgentId: agent.id,
+              },
             );
           }
         }
