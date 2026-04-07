@@ -80,7 +80,7 @@ import {
 import { classifyIssueGraphLiveness, type IssueLivenessFinding } from "./recovery/issue-graph-liveness.js";
 import { isActiveTimerFollowupIssueStatus } from "./issue-timer-followups.js";
 
-const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
+const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "qa_pending", "qa_in_progress", "qa_failed", "qa_passed", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
 export const ISSUE_LIST_DEFAULT_LIMIT = 500;
 export const ISSUE_LIST_MAX_LIMIT = 1000;
@@ -92,10 +92,31 @@ const ISSUE_COMMENT_RUN_LOG_DERIVATION_MAX_LOG_BYTES = 2_000_000;
 const ISSUE_COMMENT_RUN_LOG_DERIVATION_CHUNK_BYTES = 256_000;
 const ISSUE_COMMENT_RUN_LOG_DERIVATION_END_SLACK_MS = 60_000;
 const ISSUE_COMMENT_RUN_LOG_DERIVATION_MAX_PARALLEL_READS = 8;
+
+/** Statuses that feed into the QA pipeline after review. */
+const QA_ENTRY_SOURCES: ReadonlySet<string> = new Set(["in_review"]);
+/** Only these statuses may transition *into* QA stages. */
+const QA_STATUSES: ReadonlySet<string> = new Set(["qa_pending", "qa_in_progress", "qa_failed", "qa_passed"]);
+
+const VALID_QA_TRANSITIONS: Record<string, ReadonlySet<string>> = {
+  in_review: new Set(["qa_pending"]),
+  qa_pending: new Set(["qa_in_progress", "cancelled"]),
+  qa_in_progress: new Set(["qa_passed", "qa_failed", "blocked", "cancelled"]),
+  qa_failed: new Set(["qa_in_progress", "in_progress", "cancelled"]),
+  qa_passed: new Set(["done", "cancelled"]),
+};
 function assertTransition(from: string, to: string) {
   if (from === to) return;
   if (!ALL_ISSUE_STATUSES.includes(to)) {
     throw conflict(`Unknown issue status: ${to}`);
+  }
+  // Entering a QA status is only valid from defined source statuses or within QA.
+  if (QA_STATUSES.has(to) && !QA_STATUSES.has(from) && !QA_ENTRY_SOURCES.has(from)) {
+    throw conflict(`Cannot transition from ${from} to ${to}`);
+  }
+  // When inside a QA status, only explicitly allowed transitions are valid.
+  if (VALID_QA_TRANSITIONS[from] && QA_STATUSES.has(to) && !VALID_QA_TRANSITIONS[from].has(to)) {
+    throw conflict(`Cannot transition from ${from} to ${to}`);
   }
 }
 

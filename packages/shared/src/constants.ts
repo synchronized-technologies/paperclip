@@ -129,6 +129,10 @@ export const ISSUE_STATUSES = [
   "todo",
   "in_progress",
   "in_review",
+  "qa_pending",
+  "qa_in_progress",
+  "qa_failed",
+  "qa_passed",
   "done",
   "blocked",
   "cancelled",
@@ -208,6 +212,7 @@ export const ISSUE_ORIGIN_KINDS = [
   "harness_liveness_escalation",
   "issue_productivity_review",
   "stranded_issue_recovery",
+  "clickup",
 ] as const;
 export type BuiltInIssueOriginKind = (typeof ISSUE_ORIGIN_KINDS)[number];
 export type PluginIssueOriginKind = `plugin:${string}`;

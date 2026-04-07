@@ -1,4 +1,4 @@
-export const ACTIVE_TIMER_FOLLOWUP_ISSUE_STATUSES = ["todo", "in_progress", "in_review", "blocked"] as const;
+export const ACTIVE_TIMER_FOLLOWUP_ISSUE_STATUSES = ["todo", "in_progress", "in_review", "qa_pending", "qa_in_progress", "qa_failed", "blocked"] as const;
 export const IDLE_TIMER_FOLLOWUP_CAP = 5;
 export const LIFETIME_TIMER_FOLLOWUP_CAP = 15;
 
