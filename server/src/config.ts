@@ -85,6 +85,7 @@ export interface Config {
   feedbackExportBackendToken: string | undefined;
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
+  heartbeatStaleThresholdMs: number;
   companyDeletionEnabled: boolean;
   telemetryEnabled: boolean;
 }

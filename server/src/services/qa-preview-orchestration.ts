@@ -18,8 +18,8 @@ export interface QaPreviewOrchestrationDeps {
   wakeup: (
     agentId: string,
     opts: {
-      source?: string;
-      triggerDetail?: string;
+      source?: "on_demand" | "timer" | "assignment" | "automation";
+      triggerDetail?: "manual" | "ping" | "callback" | "system";
       reason?: string | null;
       payload?: Record<string, unknown> | null;
       requestedByActorType?: "user" | "agent" | "system";

@@ -7905,7 +7905,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                   const rows = await db.select().from(agents).where(eq(agents.companyId, companyId));
                   return rows.map((r) => ({ id: r.id, role: r.role, status: r.status }));
                 },
-                wakeup,
+                wakeup: enqueueWakeup,
               },
               {
                 companyId: agent.companyId,
