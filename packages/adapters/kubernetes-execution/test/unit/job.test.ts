@@ -49,9 +49,14 @@ describe("buildAgentJob", () => {
     expect(main?.securityContext?.capabilities?.drop).toEqual(["ALL"]);
   });
 
-  it("init container projects PAPERCLIP_WORKSPACE_STRATEGY env", () => {
+  it("init container projects PAPERCLIP_WORKSPACE_REQUEST env (the name workspace-init reads)", () => {
     const init = buildAgentJob(baseInput).spec?.template.spec?.initContainers?.find((c) => c.name === "workspace-init");
-    expect(init?.env?.find((e) => e.name === "PAPERCLIP_WORKSPACE_STRATEGY")?.value).toBe(baseInput.workspaceStrategyJson);
+    // The init container's binary, paperclip-workspace-init, reads
+    // process.env.PAPERCLIP_WORKSPACE_REQUEST (see tools/workspace-init).
+    // A mismatch here causes every real production run to fail at the init
+    // container with "PAPERCLIP_WORKSPACE_REQUEST not set".
+    expect(init?.env?.find((e) => e.name === "PAPERCLIP_WORKSPACE_REQUEST")?.value).toBe(baseInput.workspaceStrategyJson);
+    expect(init?.env?.find((e) => e.name === "PAPERCLIP_WORKSPACE_STRATEGY")).toBeUndefined();
   });
 
   it("emits an imagePullSecrets entry when supplied", () => {

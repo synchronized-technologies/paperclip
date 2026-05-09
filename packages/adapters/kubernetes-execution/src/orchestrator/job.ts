@@ -67,7 +67,12 @@ export function buildAgentJob(input: BuildJobInput): V1Job {
     image: input.initImage,
     command: ["/usr/local/bin/paperclip-workspace-init"],
     env: [
-      { name: "PAPERCLIP_WORKSPACE_STRATEGY", value: input.workspaceStrategyJson },
+      // workspace-init reads this env var; the name must match the constant
+      // it expects (process.env.PAPERCLIP_WORKSPACE_REQUEST). The value is a
+      // serialized WorkspaceRealizationRequest carrying version + source +
+      // strategy. The internal field is named workspaceStrategyJson for
+      // historical reasons; the wire-level env var is the contract.
+      { name: "PAPERCLIP_WORKSPACE_REQUEST", value: input.workspaceStrategyJson },
       { name: "PAPERCLIP_WORKSPACE_ROOT", value: "/workspace" },
       { name: "PAPERCLIP_RUN_ID", value: input.runId },
       { name: "PAPERCLIP_PUBLIC_URL", value: input.paperclipPublicUrl },

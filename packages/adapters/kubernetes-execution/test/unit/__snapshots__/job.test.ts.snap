@@ -132,7 +132,7 @@ exports[`buildAgentJob > matches the golden snapshot 1`] = `
             ],
             "env": [
               {
-                "name": "PAPERCLIP_WORKSPACE_STRATEGY",
+                "name": "PAPERCLIP_WORKSPACE_REQUEST",
                 "value": "{"kind":"git-clone","url":"https://github.com/acme/repo.git","ref":"main"}",
               },
               {
