@@ -48,6 +48,15 @@ describe("ensureTenantNamespace against kind", () => {
 
     const limitRange = await client.core.readNamespacedLimitRange("paperclip-tenant-limits", result.namespace);
     expect(limitRange.body.spec?.limits?.length).toBeGreaterThan(0);
+    // Container LimitRange must carry the `default` field on the wire (k8s
+    // typed client renames JS `_default` → JSON `default` via attributeTypeMap).
+    // Without this assertion, a typo in the JS field name would silently drop
+    // the default container limits and the cluster would have no enforcement.
+    const containerLimit = limitRange.body.spec?.limits?.find((l) => l.type === "Container");
+    expect(containerLimit?._default?.cpu).toBeDefined();
+    expect(containerLimit?._default?.memory).toBeDefined();
+    expect(containerLimit?.defaultRequest?.cpu).toBeDefined();
+    expect(containerLimit?.max?.cpu).toBeDefined();
 
     const policies = await client.networking.listNamespacedNetworkPolicy(result.namespace);
     const names = policies.body.items.map(p => p.metadata?.name).sort();
