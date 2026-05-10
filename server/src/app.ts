@@ -41,6 +41,16 @@ import { accessRoutes } from "./routes/access.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { adapterRoutes } from "./routes/adapters.js";
 import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
+import { ProviderRegistry } from "./oauth/registry.js";
+import { loadProviderConfigsFromDirectory } from "./oauth/yaml-loader.js";
+import { registerPluginContributions } from "./oauth/plugin-loader.js";
+import { createSlidingWindowLimiter } from "./oauth/rate-limiter.js";
+import { oauthRoutes } from "./routes/oauth.js";
+import { oauthCallbackRoute } from "./routes/oauth-callback.js";
+import { oauthMarkRevokedRoute } from "./routes/oauth-mark-revoked.js";
+import { startRefreshWorker } from "./oauth/refresh-worker.js";
+import { startStateSweeper } from "./oauth/state-sweeper.js";
+import { secretService } from "./services/index.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
 import { DEFAULT_LOCAL_PLUGIN_DIR, pluginLoader } from "./services/plugin-loader.js";
@@ -293,6 +303,70 @@ export async function createApp(
       allowedHostnames: opts.allowedHostnames,
     }),
   );
+
+  // ---------------------------------------------------------------------------
+  // OAuth backbone wiring (T28).
+  //
+  // Registry is constructed once at startup. YAML provider configs are loaded
+  // synchronously (createApp is already async), so the registry is populated
+  // before the routes that read from it are mounted. Plugin contributions are
+  // registered later, inside `loader.loadAll().then(...)` below — the route
+  // mounts read the registry per request, so late additions are picked up.
+  const oauthRegistry = new ProviderRegistry({ env: process.env });
+  const yamlConfigs = await loadProviderConfigsFromDirectory(
+    path.join(process.cwd(), "server", "oauth-providers"),
+  );
+  for (const cfg of yamlConfigs) oauthRegistry.register(cfg, "yaml");
+  const extraOauthDir = process.env.PAPERCLIP_OAUTH_PROVIDERS_DIR;
+  if (extraOauthDir) {
+    const extra = await loadProviderConfigsFromDirectory(extraOauthDir);
+    for (const cfg of extra) oauthRegistry.register(cfg, "yaml");
+  }
+
+  // publicUrl: prefer the explicit PAPERCLIP_PUBLIC_URL env var; fall back to
+  // the local bind. loadConfig() does not surface a single `publicUrl` field
+  // (it has authPublicBaseUrl which is auth-specific), so the env var is the
+  // single source of truth here. T31 may revisit this once a unified public
+  // URL field exists on the loaded config.
+  const oauthPublicUrl =
+    process.env.PAPERCLIP_PUBLIC_URL ?? `http://localhost:${opts.serverPort}`;
+
+  const oauthSecretService = secretService(db);
+  const oauthLimiter = createSlidingWindowLimiter({ limit: 60, windowMs: 60_000 });
+
+  api.use(
+    "/companies/:companyId/oauth",
+    oauthRoutes({
+      registry: oauthRegistry,
+      db,
+      publicUrl: oauthPublicUrl,
+      rateLimiter: oauthLimiter,
+      secretService: oauthSecretService,
+    }),
+  );
+  api.use(
+    "/oauth/callback/:providerId",
+    oauthCallbackRoute({
+      registry: oauthRegistry,
+      db,
+      publicUrl: oauthPublicUrl,
+      secretService: oauthSecretService,
+    }),
+  );
+  // run-JWT middleware threaded in T31 (Phase 4)
+  api.use(
+    "/oauth/connections/:id/mark-revoked",
+    oauthMarkRevokedRoute({ db }),
+  );
+
+  const refreshWorker = startRefreshWorker({
+    db,
+    registry: oauthRegistry,
+    secretService: oauthSecretService,
+  });
+  const stateSweeper = startStateSweeper({ db });
+  // ---------------------------------------------------------------------------
+
   app.use("/api", api);
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });
@@ -428,10 +502,19 @@ export async function createApp(
     : null;
   void loader.loadAll().then((result) => {
     if (!result) return;
+    const oauthManifests = [];
     for (const loaded of result.results) {
       if (devWatcher && loaded.success && loaded.plugin.packagePath) {
         devWatcher.watch(loaded.plugin.id, loaded.plugin.packagePath);
       }
+      if (loaded.success && loaded.plugin.manifestJson) {
+        oauthManifests.push(loaded.plugin.manifestJson);
+      }
+    }
+    try {
+      registerPluginContributions(oauthRegistry, oauthManifests);
+    } catch (err) {
+      logger.error({ err }, "Failed to register plugin OAuth contributions");
     }
   }).catch((err) => {
     logger.error({ err }, "Failed to load ready plugins on startup");
@@ -442,6 +525,8 @@ export async function createApp(
     viteHtmlRenderer?.dispose();
     hostServiceCleanup.disposeAll();
     hostServiceCleanup.teardown();
+    refreshWorker.stop();
+    stateSweeper.stop();
   });
   process.once("beforeExit", () => {
     void flushPluginLogBuffer();
