@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { CompanySecret, EnvBinding, SecretVersionSelector } from "@paperclipai/shared";
 import { AlertCircle, X } from "lucide-react";
 import { cn } from "../lib/utils";
-import type { ConnectionSummary } from "../pages/settings/connections/api";
+import type { ConnectionSummary } from "../api/oauth";
 
 const inputClass =
   "w-full rounded-md border border-border px-2.5 py-1.5 bg-transparent outline-none text-sm font-mono placeholder:text-muted-foreground/40";
@@ -111,7 +111,7 @@ function toRows(rec: Record<string, EnvBinding> | null | undefined): Row[] {
 export function EnvVarEditor({
   value,
   secrets,
-  oauthConnections = [],
+  oauthConnections,
   onCreateSecret,
   onChange,
 }: {
@@ -125,6 +125,8 @@ export function EnvVarEditor({
   const [sealError, setSealError] = useState<string | null>(null);
   const valueRef = useRef(value);
   const emittingRef = useRef(false);
+  const oauthBindingsEnabled = oauthConnections !== undefined;
+  const availableOAuthConnections = oauthConnections ?? [];
 
   useEffect(() => {
     if (emittingRef.current) {
@@ -262,12 +264,14 @@ export function EnvVarEditor({
             >
               <option value="plain">Plain</option>
               <option value="secret">Secret</option>
-              <option value="oauth_token">OAuth token</option>
+              {oauthBindingsEnabled ? (
+                <option value="oauth_token">OAuth token</option>
+              ) : null}
             </select>
             {row.source === "oauth_token" ? (
               <>
                 {(() => {
-                  const activeConnections = oauthConnections.filter(
+                  const activeConnections = availableOAuthConnections.filter(
                     (conn) => conn.status === "active",
                   );
                   if (activeConnections.length === 0) {
@@ -412,7 +416,7 @@ export function EnvVarEditor({
               issues.push({ key: row.key.trim() || secret.name, reason: secret.status });
             }
           } else if (row.source === "oauth_token" && row.connectionId) {
-            const conn = oauthConnections.find((c) => c.id === row.connectionId);
+            const conn = availableOAuthConnections.find((c) => c.id === row.connectionId);
             if (!conn) {
               issues.push({
                 key: row.key.trim() || row.connectionId,

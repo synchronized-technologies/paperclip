@@ -18,7 +18,7 @@ import {
   startConnect,
   type ConnectionSummary,
   type ProviderSummary,
-} from "./connections/api";
+} from "@/api/oauth";
 import { connectionsStrings as t } from "./connections/strings";
 
 const PROVIDERS_QUERY_KEY = (companyId: string) => ["oauth", "providers", companyId] as const;

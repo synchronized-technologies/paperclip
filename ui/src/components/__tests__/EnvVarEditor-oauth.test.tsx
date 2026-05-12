@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompanySecret, EnvBinding } from "@paperclipai/shared";
 import { EnvVarEditor } from "../EnvVarEditor";
-import type { ConnectionSummary } from "../../pages/settings/connections/api";
+import type { ConnectionSummary } from "../../api/oauth";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -45,10 +45,10 @@ const noopCreateSecret = (): Promise<CompanySecret> => {
 
 function findFirstSourceSelect(container: HTMLElement): HTMLSelectElement {
   const selects = Array.from(container.querySelectorAll("select"));
-  // The first select per row is the source dropdown (Plain | Secret | OAuth token).
-  const sourceSelect = selects.find((s) =>
-    Array.from(s.options).some((o) => o.value === "oauth_token"),
-  );
+  const sourceSelect = selects.find((s) => {
+    const values = Array.from(s.options).map((o) => o.value);
+    return values.includes("plain") && values.includes("secret");
+  });
   if (!sourceSelect) {
     throw new Error(
       `No source <select> found — saw selects with options: ${selects
@@ -76,7 +76,24 @@ describe("EnvVarEditor — oauth_token binding", () => {
     container.remove();
   });
 
-  it("offers OAuth token as a source option even with empty connection list", () => {
+  it("hides OAuth token as a source option when connections are not provided", () => {
+    const root = createRoot(container);
+    act(() => {
+      root.render(
+        <EnvVarEditor
+          value={{ GH: { type: "plain", value: "" } }}
+          secrets={[]}
+          onCreateSecret={noopCreateSecret}
+          onChange={() => {}}
+        />,
+      );
+    });
+    const sourceSelect = findFirstSourceSelect(container);
+    const options = Array.from(sourceSelect.options).map((o) => o.value);
+    expect(options).not.toContain("oauth_token");
+  });
+
+  it("offers OAuth token as a source option when connections are provided", () => {
     const root = createRoot(container);
     act(() => {
       root.render(

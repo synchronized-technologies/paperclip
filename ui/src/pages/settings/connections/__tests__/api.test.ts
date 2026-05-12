@@ -5,7 +5,7 @@ import {
   listProviders,
   refreshConnection,
   startConnect,
-} from "../api";
+} from "@/api/oauth";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

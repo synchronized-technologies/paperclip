@@ -22,7 +22,7 @@ import { Separator } from "@/components/ui/separator";
 import type {
   ConnectionSummary,
   ProviderSummary,
-} from "../settings/connections/api";
+} from "@/api/oauth";
 import { connectionsStrings as t } from "../settings/connections/strings";
 
 const PROVIDER_FIXTURES: Record<string, ProviderSummary> = {

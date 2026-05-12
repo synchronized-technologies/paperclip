@@ -11,7 +11,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import type { ConnectionSummary } from "./api";
+import type { ConnectionSummary } from "@/api/oauth";
 import { connectionsStrings as t } from "./strings";
 
 interface Props {

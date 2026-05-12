@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { timeAgo } from "@/lib/timeAgo";
-import type { ConnectionSummary, ProviderSummary } from "./api";
+import type { ConnectionSummary, ProviderSummary } from "@/api/oauth";
 import { connectionsStrings as t } from "./strings";
 
 interface Props {
