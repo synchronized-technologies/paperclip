@@ -268,6 +268,8 @@ export type {
   PrincipalPermissionGrant,
   PrincipalType,
   PluginDatabaseClient,
+  HumanCompanyMembershipRole,
+  MembershipStatus,
 } from "./types.js";
 
 // Manifest and constant types re-exported from @paperclipai/shared
@@ -375,4 +377,9 @@ export {
   PLUGIN_WEBHOOK_DELIVERY_STATUSES,
   PLUGIN_EVENT_TYPES,
   PLUGIN_BRIDGE_ERROR_CODES,
+  PERMISSION_KEYS,
+  HUMAN_COMPANY_MEMBERSHIP_ROLES,
+  HUMAN_COMPANY_MEMBERSHIP_ROLE_LABELS,
+  MEMBERSHIP_STATUSES,
+  PRINCIPAL_TYPES,
 } from "@paperclipai/shared";

@@ -6,6 +6,70 @@ import {
   type PluginCompanySettingsPageProps,
 } from "@paperclipai/plugin-sdk/ui";
 
+type HumanCompanyMembershipRole = "owner" | "admin" | "operator" | "viewer";
+type MemberEditableStatus = "pending" | "active" | "suspended";
+type MemberPrincipalType = "user" | "agent";
+type PermissionKey =
+  | "agents:create"
+  | "environments:manage"
+  | "users:invite"
+  | "users:manage_permissions"
+  | "tasks:assign"
+  | "tasks:assign_scope"
+  | "tasks:manage_active_checkouts"
+  | "joins:approve";
+
+const HUMAN_ROLE_LABELS: Record<HumanCompanyMembershipRole, string> = {
+  owner: "Owner",
+  admin: "Admin",
+  operator: "Operator",
+  viewer: "Viewer",
+};
+
+const MEMBER_PERMISSION_KEYS: ReadonlyArray<PermissionKey> = [
+  "agents:create",
+  "users:invite",
+  "users:manage_permissions",
+  "tasks:assign",
+  "tasks:manage_active_checkouts",
+  "joins:approve",
+  "environments:manage",
+];
+
+const PERMISSION_LABELS: Record<PermissionKey, string> = {
+  "agents:create": "Create agents",
+  "users:invite": "Invite humans and agents",
+  "users:manage_permissions": "Manage members and grants",
+  "tasks:assign": "Assign tasks",
+  "tasks:assign_scope": "Assign scoped tasks",
+  "tasks:manage_active_checkouts": "Manage active task checkouts",
+  "joins:approve": "Approve join requests",
+  "environments:manage": "Manage environments",
+};
+
+const IMPLICIT_ROLE_GRANTS: Record<HumanCompanyMembershipRole, PermissionKey[]> = {
+  owner: ["agents:create", "users:invite", "users:manage_permissions", "tasks:assign", "joins:approve"],
+  admin: ["agents:create", "users:invite", "tasks:assign", "joins:approve"],
+  operator: ["tasks:assign"],
+  viewer: [],
+};
+
+type MemberRecord = {
+  id: string;
+  companyId: string;
+  principalType: MemberPrincipalType;
+  principalId: string;
+  status: MemberEditableStatus | "archived";
+  membershipRole: HumanCompanyMembershipRole | string | null;
+  grants: Array<{ permissionKey: string; scope: Record<string, unknown> | null }>;
+};
+
+type MemberAccessData = {
+  companyId: string;
+  warnings: Array<{ code: string; message: string }>;
+  members: MemberRecord[];
+};
+
 type LicenseState = {
   status: "active" | "inactive";
   activatedAt?: string;
@@ -212,9 +276,15 @@ function getErrorMessage(error: unknown): string {
 
 function CapabilityWarning({ warnings }: { warnings: Overview["warnings"] }) {
   if (warnings.length === 0) return null;
+  const denied = warnings.some((warning) => warning.code === "CAPABILITY_DENIED");
   return (
     <div style={warningStyle}>
-      <strong>Some advanced data could not be loaded.</strong>
+      <strong>{denied ? "Some advanced data is unavailable." : "Some advanced data could not be loaded."}</strong>
+      <div style={mutedTextStyle}>
+        {denied
+          ? "The plugin is missing one or more capability grants. Install the latest version or re-activate the plugin to restore the missing surfaces."
+          : "Existing restrictions remain enforced by core. Retry once the underlying service is reachable."}
+      </div>
       <ul style={{ margin: "6px 0 0", paddingLeft: "18px" }}>
         {warnings.map((warning, index) => (
           <li key={`${warning.code}-${index}`}>
@@ -281,6 +351,253 @@ function getPolicyString(policy: Record<string, unknown> | null | undefined, sec
 function getPolicyBoolean(policy: Record<string, unknown> | null | undefined, section: string, key: string, fallback: boolean) {
   const value = getPolicySection(policy, section)[key];
   return typeof value === "boolean" ? value : fallback;
+}
+
+function MembersPanel({ companyId }: { companyId: string }) {
+  const query = usePluginData<MemberAccessData>("memberAccess", { companyId });
+  const saveMemberAccess = usePluginAction("saveMemberAccess");
+  const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
+  const [draftRole, setDraftRole] = useState<HumanCompanyMembershipRole | "">("");
+  const [draftStatus, setDraftStatus] = useState<MemberEditableStatus>("active");
+  const [draftGrants, setDraftGrants] = useState<Set<PermissionKey>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const members = query.data?.members ?? [];
+  const editingMember = useMemo(
+    () => members.find((member) => member.id === editingMemberId) ?? null,
+    [members, editingMemberId],
+  );
+  const implicitGrantKeys = useMemo<PermissionKey[]>(
+    () => (draftRole ? IMPLICIT_ROLE_GRANTS[draftRole] : []),
+    [draftRole],
+  );
+
+  useEffect(() => {
+    if (!editingMember) return;
+    const role = editingMember.membershipRole;
+    setDraftRole((role && role in HUMAN_ROLE_LABELS ? (role as HumanCompanyMembershipRole) : ""));
+    setDraftStatus(
+      editingMember.status === "active" || editingMember.status === "pending" || editingMember.status === "suspended"
+        ? editingMember.status
+        : "suspended",
+    );
+    setDraftGrants(new Set(editingMember.grants.map((grant) => grant.permissionKey as PermissionKey)));
+    setError(null);
+  }, [editingMember]);
+
+  if (query.loading && !query.data) {
+    return <div style={mutedTextStyle}>Loading members...</div>;
+  }
+
+  if (query.error) {
+    return (
+      <div style={warningStyle}>
+        <strong>Could not load company members.</strong>
+        <div>{query.error.message}</div>
+      </div>
+    );
+  }
+
+  const humanMembers = members.filter((member) => member.principalType === "user");
+  const agentMembers = members.filter((member) => member.principalType === "agent");
+  const closeDialog = () => {
+    setEditingMemberId(null);
+    setError(null);
+  };
+
+  async function save() {
+    if (!editingMember) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await saveMemberAccess({
+        companyId,
+        memberId: editingMember.id,
+        membershipRole: draftRole || null,
+        status: draftStatus,
+        grants: [...draftGrants],
+      });
+      query.refresh();
+      setEditingMemberId(null);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={layoutStack}>
+      <CapabilityWarning warnings={query.data?.warnings ?? []} />
+
+      <div style={cardStyle}>
+        <div style={rowStyle}>
+          <div style={sectionHeadingStyle}>Members</div>
+          <button type="button" style={buttonStyle} onClick={() => query.refresh()}>Refresh</button>
+        </div>
+        <div style={mutedTextStyle}>
+          Roles, status, and explicit permission grants for users and agents in this company. Saves through capability-gated plugin SDK calls; data lives in core.
+        </div>
+        {humanMembers.length === 0 && agentMembers.length === 0 ? (
+          <div style={mutedTextStyle}>No company members yet.</div>
+        ) : null}
+        <MembersTable members={humanMembers} label="Humans" emptyLabel="No human members" onEdit={setEditingMemberId} />
+        <MembersTable members={agentMembers} label="Agents" emptyLabel="No agent members" onEdit={setEditingMemberId} />
+      </div>
+
+      {editingMember ? (
+        <div style={cardStyle} role="dialog" aria-label="Edit member">
+          <div style={rowStyle}>
+            <div style={sectionHeadingStyle}>Edit member</div>
+            <Pill label={editingMember.principalType} />
+          </div>
+          <div style={mutedTextStyle}>
+            Principal <code>{editingMember.principalId}</code>
+          </div>
+
+          <div style={gridStyle}>
+            <label style={{ display: "grid", gap: "6px" }}>
+              <span style={sectionHeadingStyle}>Company role</span>
+              <select
+                style={inputStyle}
+                value={draftRole}
+                onChange={(event) => setDraftRole(event.target.value as HumanCompanyMembershipRole | "")}
+              >
+                <option value="">Unset</option>
+                {Object.entries(HUMAN_ROLE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>{label}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: "grid", gap: "6px" }}>
+              <span style={sectionHeadingStyle}>Membership status</span>
+              <select
+                style={inputStyle}
+                value={draftStatus}
+                onChange={(event) => setDraftStatus(event.target.value as MemberEditableStatus)}
+              >
+                <option value="active">Active</option>
+                <option value="pending">Pending</option>
+                <option value="suspended">Suspended</option>
+              </select>
+            </label>
+          </div>
+
+          <div style={subtleCardStyle}>
+            <div style={rowStyle}>
+              <strong>Implicit grants from role</strong>
+              {draftRole ? <Pill label={HUMAN_ROLE_LABELS[draftRole]} /> : <Pill label="No role" />}
+            </div>
+            <div style={mutedTextStyle}>
+              {draftRole
+                ? `${HUMAN_ROLE_LABELS[draftRole]} already includes these permissions automatically.`
+                : "No role selected, so this member has no implicit grants right now."}
+            </div>
+            {implicitGrantKeys.length > 0 ? (
+              <div style={rowStyle}>
+                {implicitGrantKeys.map((permissionKey) => (
+                  <Pill key={permissionKey} label={PERMISSION_LABELS[permissionKey]} />
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <div>
+            <div style={sectionHeadingStyle}>Explicit grants</div>
+            <div style={mutedTextStyle}>
+              Explicit grants persist even when the role changes. Scoped assignment grants are managed in the policy editor below.
+            </div>
+            <div style={{ ...gridStyle, marginTop: "8px" }}>
+              {MEMBER_PERMISSION_KEYS.map((permissionKey) => {
+                const isImplicit = implicitGrantKeys.includes(permissionKey);
+                const isChecked = draftGrants.has(permissionKey);
+                return (
+                  <label key={permissionKey} style={subtleCardStyle}>
+                    <label style={{ ...rowStyle, gap: "10px" }}>
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(event) => {
+                          setDraftGrants((current) => {
+                            const next = new Set(current);
+                            if (event.target.checked) next.add(permissionKey);
+                            else next.delete(permissionKey);
+                            return next;
+                          });
+                        }}
+                      />
+                      <span>
+                        <strong>{PERMISSION_LABELS[permissionKey]}</strong>
+                        <div style={{ ...mutedTextStyle, fontSize: "0.72rem" }}>
+                          <code>{permissionKey}</code>
+                        </div>
+                      </span>
+                    </label>
+                    {isImplicit && !isChecked ? (
+                      <div style={mutedTextStyle}>Included implicitly by the {draftRole ? HUMAN_ROLE_LABELS[draftRole] : "selected"} role.</div>
+                    ) : null}
+                    {isChecked ? (
+                      <div style={mutedTextStyle}>Stored explicitly for this member.</div>
+                    ) : null}
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          {error ? <div style={warningStyle}><strong>Could not save:</strong> {error}</div> : null}
+
+          <div style={rowStyle}>
+            <button type="button" style={buttonStyle} disabled={busy} onClick={closeDialog}>
+              Cancel
+            </button>
+            <button type="button" style={primaryButtonStyle} disabled={busy} onClick={() => void save()}>
+              {busy ? "Saving..." : "Save access"}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MembersTable({
+  members,
+  label,
+  emptyLabel,
+  onEdit,
+}: {
+  members: MemberRecord[];
+  label: string;
+  emptyLabel: string;
+  onEdit: (memberId: string) => void;
+}) {
+  return (
+    <div style={subtleCardStyle}>
+      <div style={rowStyle}>
+        <strong>{label}</strong>
+        <Pill label={`${members.length}`} />
+      </div>
+      {members.length === 0 ? (
+        <div style={mutedTextStyle}>{emptyLabel}</div>
+      ) : (
+        <div style={{ display: "grid", gap: "6px" }}>
+          {members.map((member) => (
+            <div key={member.id} style={{ ...rowStyle, justifyContent: "space-between" }}>
+              <div style={{ display: "grid", gap: "2px" }}>
+                <strong>{member.principalId}</strong>
+                <div style={mutedTextStyle}>
+                  Role <code>{member.membershipRole ?? "unset"}</code> • Status <code>{member.status}</code> • {member.grants.length} grant{member.grants.length === 1 ? "" : "s"}
+                </div>
+              </div>
+              <button type="button" style={buttonStyle} onClick={() => onEdit(member.id)}>Edit</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function AdvancedPolicyEditor({ companyId }: { companyId: string }) {
@@ -617,6 +934,7 @@ export function EePermissionsCompanySettingsPage(_props: PluginCompanySettingsPa
         </div>
       </div>
 
+      <MembersPanel companyId={companyId} />
       <AdvancedPolicyEditor companyId={companyId} />
     </div>
   );

@@ -2,6 +2,8 @@ import {
   definePlugin,
   runWorker,
   PLUGIN_RPC_ERROR_CODES,
+  type HumanCompanyMembershipRole,
+  type MembershipStatus,
   type PluginAccessMember,
   type PluginAuthorizationAuditEntry,
   type PluginAuthorizationPolicySummary,
@@ -42,6 +44,22 @@ export type EePermissionsOverview = {
 };
 
 type AssignmentGrantMode = "broad" | "scoped_agent" | "clear";
+
+const HUMAN_ROLE_VALUES: readonly HumanCompanyMembershipRole[] = ["owner", "admin", "operator", "viewer"];
+const MEMBER_EDITABLE_STATUSES: ReadonlyArray<Extract<MembershipStatus, "pending" | "active" | "suspended">> = [
+  "pending",
+  "active",
+  "suspended",
+];
+const NON_MEMBER_PERMISSION_KEYS: ReadonlySet<PermissionKey> = new Set([
+  "tasks:assign_scope",
+]);
+
+export type EePermissionsMemberAccessData = {
+  companyId: string;
+  warnings: Array<{ code: string; message: string }>;
+  members: PluginAccessMember[];
+};
 
 export type EePermissionsAdvancedPolicyData = {
   companyId: string;
@@ -91,6 +109,33 @@ function readBoolean(params: Record<string, unknown>, key: string, fallback = fa
 function readGrantMode(value: unknown): AssignmentGrantMode {
   if (value === "broad" || value === "scoped_agent" || value === "clear") return value;
   return "scoped_agent";
+}
+
+function readHumanRole(value: unknown): HumanCompanyMembershipRole | null {
+  if (value === null) return null;
+  if (typeof value !== "string") return null;
+  if (value === "") return null;
+  return (HUMAN_ROLE_VALUES as readonly string[]).includes(value)
+    ? (value as HumanCompanyMembershipRole)
+    : null;
+}
+
+function readEditableStatus(value: unknown): Extract<MembershipStatus, "pending" | "active" | "suspended"> {
+  if (typeof value === "string" && (MEMBER_EDITABLE_STATUSES as readonly string[]).includes(value)) {
+    return value as Extract<MembershipStatus, "pending" | "active" | "suspended">;
+  }
+  return "active";
+}
+
+function readPermissionKeyArray(value: unknown): PermissionKey[] {
+  if (!Array.isArray(value)) return [];
+  const out: PermissionKey[] = [];
+  for (const entry of value) {
+    if (typeof entry === "string" && !out.includes(entry as PermissionKey)) {
+      out.push(entry as PermissionKey);
+    }
+  }
+  return out;
 }
 
 function withoutAssignmentGrants(grants: PrincipalPermissionGrant[]) {
@@ -175,6 +220,26 @@ const plugin = definePlugin({
         if (isCapabilityDenied(error)) return [] as PluginAccessMember[];
         throw error;
       }
+    });
+
+    ctx.data.register("memberAccess", async (params) => {
+      const companyId = readCompanyId(params ?? {});
+      const license = await readLicense(ctx, companyId);
+      if (license.status !== "active") {
+        return {
+          companyId,
+          warnings: [],
+          members: [],
+        } satisfies EePermissionsMemberAccessData;
+      }
+      const warnings: EePermissionsMemberAccessData["warnings"] = [];
+      let members: PluginAccessMember[] = [];
+      try {
+        members = await ctx.access.members.list({ companyId });
+      } catch (error) {
+        warnings.push(formatError(error));
+      }
+      return { companyId, warnings, members } satisfies EePermissionsMemberAccessData;
     });
 
     ctx.data.register("grants", async (params) => {
@@ -371,6 +436,56 @@ const plugin = definePlugin({
         stateKey: LICENSE_STATE_KEY,
       });
       return DEFAULT_LICENSE;
+    });
+
+    ctx.actions.register("saveMemberAccess", async (params) => {
+      const input = params ?? {};
+      const companyId = readCompanyId(input);
+      const license = await readLicense(ctx, companyId);
+      if (license.status !== "active") {
+        throw new Error("Paperclip EE permissions mode is not active for this company");
+      }
+      const memberId = readString(input, "memberId");
+      if (!memberId) throw new Error("memberId is required");
+      const member = await ctx.access.members.get(memberId, companyId);
+      if (!member) throw new Error(`Membership not found: ${memberId}`);
+      const membershipRole = readHumanRole(input.membershipRole);
+      const status = readEditableStatus(input.status);
+      const explicitGrants = readPermissionKeyArray(input.grants)
+        .filter((key) => !NON_MEMBER_PERMISSION_KEYS.has(key));
+
+      const updatedMember = await ctx.access.members.update(
+        memberId,
+        { membershipRole, status },
+        companyId,
+      );
+
+      const existing = await ctx.authorization.grants.list({
+        companyId,
+        principalType: member.principalType,
+        principalId: member.principalId,
+      });
+      const carriedOverNonMemberGrants = existing
+        .filter((grant) => NON_MEMBER_PERMISSION_KEYS.has(grant.permissionKey as PermissionKey))
+        .map((grant) => ({
+          permissionKey: grant.permissionKey as PermissionKey,
+          scope: grant.scope && typeof grant.scope === "object" ? grant.scope as Record<string, unknown> : null,
+        }));
+      const nextGrants = [
+        ...explicitGrants.map((permissionKey) => ({ permissionKey, scope: null as Record<string, unknown> | null })),
+        ...carriedOverNonMemberGrants,
+      ];
+
+      const grants = await ctx.authorization.grants.set({
+        companyId,
+        principalType: member.principalType,
+        principalId: member.principalId,
+        grants: nextGrants,
+      });
+
+      return {
+        member: { ...updatedMember, grants },
+      };
     });
 
     ctx.actions.register("saveAgentPolicy", async (params) => {

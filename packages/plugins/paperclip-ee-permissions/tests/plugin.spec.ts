@@ -4,6 +4,7 @@ import manifest, { EXPORT_NAMES, SLOT_IDS } from "../src/manifest.js";
 import plugin, {
   type EePermissionsAdvancedPolicyData,
   type EePermissionsLicense,
+  type EePermissionsMemberAccessData,
   type EePermissionsOverview,
 } from "../src/worker.js";
 
@@ -11,6 +12,8 @@ const COMPANY_ID = "00000000-0000-4000-8000-000000000001";
 const ACTOR_AGENT_ID = "00000000-0000-4000-8000-0000000000a1";
 const TARGET_AGENT_ID = "00000000-0000-4000-8000-0000000000a2";
 const ISSUE_ID = "00000000-0000-4000-8000-0000000000b1";
+const MEMBER_USER_ID = "00000000-0000-4000-8000-0000000000c1";
+const MEMBER_RECORD_ID = "00000000-0000-4000-8000-0000000000d1";
 
 describe("paperclip-ee-permissions manifest", () => {
   it("declares the company settings page slot", () => {
@@ -215,7 +218,169 @@ describe("paperclip-ee-permissions worker", () => {
       agentVisibility: { mode: "private" },
       protectedAgent: { requiresApproval: true },
     });
-    expect(grants).toEqual([]);
+    expect(grants).toEqual([
+      {
+        principalType: "agent",
+        principalId: ACTOR_AGENT_ID,
+        permissionKey: "tasks:assign_scope",
+        scope: { assigneeAgentId: TARGET_AGENT_ID },
+      },
+    ]);
+  });
+
+  it("returns empty member access while unlicensed", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: manifest.capabilities,
+    });
+    await plugin.definition.setup(harness.ctx);
+    const data = await harness.getData<EePermissionsMemberAccessData>("memberAccess", {
+      companyId: COMPANY_ID,
+    });
+    expect(data.companyId).toBe(COMPANY_ID);
+    expect(data.members).toEqual([]);
+    expect(data.warnings).toEqual([]);
+  });
+
+  it("loads seeded company members once licensed", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: manifest.capabilities,
+    });
+    harness.seed({
+      accessMembers: [
+        {
+          id: MEMBER_RECORD_ID,
+          companyId: COMPANY_ID,
+          principalType: "user",
+          principalId: MEMBER_USER_ID,
+          status: "active",
+          membershipRole: "operator",
+          grants: [],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      principalGrants: [
+        {
+          id: "grant-1",
+          companyId: COMPANY_ID,
+          principalType: "user",
+          principalId: MEMBER_USER_ID,
+          permissionKey: "users:invite",
+          scope: null,
+          grantedByUserId: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ],
+    });
+    await plugin.definition.setup(harness.ctx);
+    await harness.performAction("activateLicense", { companyId: COMPANY_ID });
+
+    const data = await harness.getData<EePermissionsMemberAccessData>("memberAccess", {
+      companyId: COMPANY_ID,
+    });
+    expect(data.members).toHaveLength(1);
+    const [member] = data.members;
+    expect(member.principalId).toBe(MEMBER_USER_ID);
+    expect(member.membershipRole).toBe("operator");
+    expect(member.grants.map((grant) => grant.permissionKey)).toEqual(["users:invite"]);
+  });
+
+  it("saves member role, status, and grants atomically", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: manifest.capabilities,
+    });
+    harness.seed({
+      accessMembers: [
+        {
+          id: MEMBER_RECORD_ID,
+          companyId: COMPANY_ID,
+          principalType: "user",
+          principalId: MEMBER_USER_ID,
+          status: "active",
+          membershipRole: "viewer",
+          grants: [],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+      principalGrants: [
+        // pre-existing scoped grant should survive a member-level save
+        {
+          id: "grant-scoped",
+          companyId: COMPANY_ID,
+          principalType: "user",
+          principalId: MEMBER_USER_ID,
+          permissionKey: "tasks:assign_scope",
+          scope: { assigneeAgentId: TARGET_AGENT_ID },
+          grantedByUserId: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ],
+    });
+    await plugin.definition.setup(harness.ctx);
+    await harness.performAction("activateLicense", { companyId: COMPANY_ID });
+
+    const result = await harness.performAction<{
+      member: EePermissionsMemberAccessData["members"][number];
+    }>("saveMemberAccess", {
+      companyId: COMPANY_ID,
+      memberId: MEMBER_RECORD_ID,
+      membershipRole: "operator",
+      status: "active",
+      grants: ["users:invite", "tasks:assign"],
+    });
+    expect(result.member.membershipRole).toBe("operator");
+    expect(result.member.status).toBe("active");
+    const grantKeys = result.member.grants.map((grant) => grant.permissionKey).sort();
+    expect(grantKeys).toEqual(["tasks:assign", "tasks:assign_scope", "users:invite"]);
+
+    const reread = await harness.getData<EePermissionsMemberAccessData>("memberAccess", {
+      companyId: COMPANY_ID,
+    });
+    const [updated] = reread.members;
+    expect(updated.membershipRole).toBe("operator");
+    expect(updated.grants.map((grant) => grant.permissionKey).sort()).toEqual([
+      "tasks:assign",
+      "tasks:assign_scope",
+      "users:invite",
+    ]);
+  });
+
+  it("refuses to save member access while unlicensed", async () => {
+    const harness = createTestHarness({
+      manifest,
+      capabilities: manifest.capabilities,
+    });
+    harness.seed({
+      accessMembers: [
+        {
+          id: MEMBER_RECORD_ID,
+          companyId: COMPANY_ID,
+          principalType: "user",
+          principalId: MEMBER_USER_ID,
+          status: "active",
+          membershipRole: "viewer",
+          grants: [],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
+    });
+    await plugin.definition.setup(harness.ctx);
+    await expect(
+      harness.performAction("saveMemberAccess", {
+        companyId: COMPANY_ID,
+        memberId: MEMBER_RECORD_ID,
+        membershipRole: "operator",
+        status: "active",
+        grants: [],
+      }),
+    ).rejects.toThrow(/permissions mode is not active/);
   });
 
   it("rejects requests that omit companyId", async () => {
