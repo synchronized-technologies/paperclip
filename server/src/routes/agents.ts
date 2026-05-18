@@ -501,6 +501,15 @@ export function agentRoutes(
       };
     }
 
+    if (membership?.status === "active") {
+      return {
+        canAssignTasks: true,
+        taskAssignSource: "simple_default" as const,
+        membership,
+        grants,
+      };
+    }
+
     return {
       canAssignTasks: false,
       taskAssignSource: "none" as const,

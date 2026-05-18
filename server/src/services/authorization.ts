@@ -58,6 +58,7 @@ export type AuthorizationDecision = {
     | "allow_legacy_agent_creator"
     | "allow_self"
     | "allow_company_agent"
+    | "allow_simple_company_member"
     | "allow_manager_chain"
     | "deny_unauthenticated"
     | "deny_company_boundary"
@@ -114,6 +115,10 @@ function scopeValuesForKeys(grantScope: Record<string, unknown>, keys: string[])
 
 function scopeIncludesId(ids: string[], id: string | null | undefined) {
   return Boolean(id && ids.includes(id));
+}
+
+function isSimpleAssignableAgentStatus(status: string | null | undefined) {
+  return status !== "pending_approval" && status !== "terminated";
 }
 
 async function isAgentInSubtree(db: Db, companyId: string, rootAgentId: string, targetAgentId: string) {
@@ -334,12 +339,29 @@ export function authorizationService(db: Db) {
         id: agents.id,
         companyId: agents.companyId,
         role: agents.role,
+        status: agents.status,
         reportsTo: agents.reportsTo,
         permissions: agents.permissions,
       })
       .from(agents)
       .where(eq(agents.id, agentId))
       .then((rows) => rows[0] ?? null);
+  }
+
+  async function assignmentTargetIsInCompany(resource: AuthorizationResource) {
+    if (resource.type !== "issue") return true;
+    if (resource.assigneeAgentId) {
+      const target = await loadAgent(resource.assigneeAgentId);
+      return Boolean(
+        target &&
+        target.companyId === resource.companyId &&
+        isSimpleAssignableAgentStatus(target.status),
+      );
+    }
+    if (resource.assigneeUserId) {
+      return Boolean(await getActiveMembership(resource.companyId, "user", resource.assigneeUserId));
+    }
+    return true;
   }
 
   async function isManagerOf(companyId: string, managerAgentId: string, assigneeAgentId: string) {
@@ -423,6 +445,30 @@ export function authorizationService(db: Db) {
           explanation: "Board user id is required.",
         });
       }
+      if (input.action === "tasks:assign") {
+        if (!(await assignmentTargetIsInCompany(input.resource))) {
+          return deny({
+            action: input.action,
+            reason: "deny_company_boundary",
+            explanation: "Task assignment target agent is not active in the target company.",
+          });
+        }
+        const membership = await getActiveMembership(companyId, "user", input.actor.userId);
+        if (membership && membership.membershipRole !== "viewer") {
+          return allow({
+            action: input.action,
+            reason: "allow_simple_company_member",
+            explanation: "Allowed by simple mode company-wide task assignment default.",
+          });
+        }
+        if (!input.actor.memberships && input.actor.companyIds?.includes(companyId)) {
+          return allow({
+            action: input.action,
+            reason: "allow_simple_company_member",
+            explanation: "Allowed by legacy company membership context.",
+          });
+        }
+      }
       if (!permissionKey) {
         return deny({
           action: input.action,
@@ -459,6 +505,37 @@ export function authorizationService(db: Db) {
       });
     }
 
+    const actorAgent = await loadAgent(actorAgentId);
+    if (!actorAgent || actorAgent.companyId !== companyId) {
+      return deny({
+        action: input.action,
+        reason: "deny_company_boundary",
+        explanation: "Actor agent was not found in the target company.",
+      });
+    }
+
+    if (input.action === "tasks:assign") {
+      if (!isSimpleAssignableAgentStatus(actorAgent.status)) {
+        return deny({
+          action: input.action,
+          reason: "deny_missing_membership",
+          explanation: "Actor agent is not active for simple mode task assignment.",
+        });
+      }
+      if (!(await assignmentTargetIsInCompany(input.resource))) {
+        return deny({
+          action: input.action,
+          reason: "deny_company_boundary",
+          explanation: "Task assignment target agent is not active in the target company.",
+        });
+      }
+      return allow({
+        action: input.action,
+        reason: "allow_simple_company_member",
+        explanation: "Allowed by simple mode company-wide task assignment default.",
+      });
+    }
+
     if (input.action === "issue:mutate") {
       const resource = input.resource.type === "issue" ? input.resource : null;
       if (resource?.assigneeAgentId === actorAgentId) {
@@ -488,12 +565,7 @@ export function authorizationService(db: Db) {
       });
     }
 
-    let deniedGrantDecision: AuthorizationDecision | null = null;
-    if (input.action === "tasks:assign") {
-      const grantDecision = await decideWithTaskAssignmentGrants("agent", actorAgentId);
-      if (grantDecision.allowed) return grantDecision;
-      deniedGrantDecision = grantDecision;
-    } else if (permissionKey) {
+    if (permissionKey) {
       const grantDecision = await decidePrincipalGrant({
         companyId,
         principalType: "agent",
@@ -505,20 +577,10 @@ export function authorizationService(db: Db) {
       if (grantDecision.allowed) return grantDecision;
     }
 
-    const actorAgent = await loadAgent(actorAgentId);
-    if (!actorAgent || actorAgent.companyId !== companyId) {
-      return deny({
-        action: input.action,
-        reason: "deny_company_boundary",
-        explanation: "Actor agent was not found in the target company.",
-      });
-    }
-
     if (
       (input.action === "agents:create" ||
         input.action === "agent_config:read" ||
         input.action === "agent_config:update" ||
-        input.action === "tasks:assign" ||
         input.action === "tasks:manage_active_checkouts") &&
       canCreateAgentsLegacy(actorAgent)
     ) {
@@ -528,8 +590,6 @@ export function authorizationService(db: Db) {
         explanation: "Allowed by legacy agent creator authority.",
       });
     }
-
-    if (deniedGrantDecision) return deniedGrantDecision;
 
     if (
       input.action === "tasks:manage_active_checkouts" &&

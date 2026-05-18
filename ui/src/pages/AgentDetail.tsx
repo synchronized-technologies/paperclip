@@ -1713,7 +1713,9 @@ function ConfigurationTab({
         ? "Enabled automatically while this agent can create new agents."
         : taskAssignSource === "explicit_grant"
           ? "Enabled via explicit company permission grant."
-          : "Disabled unless explicitly granted.";
+          : taskAssignSource === "simple_default"
+            ? "Enabled by simple company-wide task assignment defaults."
+            : "Disabled unless explicitly granted.";
 
   return (
     <div className="space-y-6">
