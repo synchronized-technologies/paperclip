@@ -59,6 +59,7 @@ export type EePermissionsMemberAccessData = {
   companyId: string;
   warnings: Array<{ code: string; message: string }>;
   members: PluginAccessMember[];
+  agents: Awaited<ReturnType<PluginContext["agents"]["list"]>>;
 };
 
 export type EePermissionsAdvancedPolicyData = {
@@ -230,16 +231,23 @@ const plugin = definePlugin({
           companyId,
           warnings: [],
           members: [],
+          agents: [],
         } satisfies EePermissionsMemberAccessData;
       }
       const warnings: EePermissionsMemberAccessData["warnings"] = [];
       let members: PluginAccessMember[] = [];
+      let agents: EePermissionsMemberAccessData["agents"] = [];
       try {
         members = await ctx.access.members.list({ companyId });
       } catch (error) {
         warnings.push(formatError(error));
       }
-      return { companyId, warnings, members } satisfies EePermissionsMemberAccessData;
+      try {
+        agents = await ctx.agents.list({ companyId, limit: 200, offset: 0 });
+      } catch (error) {
+        warnings.push(formatError(error));
+      }
+      return { companyId, warnings, members, agents } satisfies EePermissionsMemberAccessData;
     });
 
     ctx.data.register("grants", async (params) => {

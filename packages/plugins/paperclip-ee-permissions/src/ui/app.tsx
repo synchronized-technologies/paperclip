@@ -1,9 +1,20 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import {
+  AssigneePicker,
+  DataTable,
+  ErrorBoundary,
+  JsonTree,
+  KeyValueList,
+  MetricCard,
+  ProjectPicker,
+  Spinner,
+  StatusBadge,
   useHostContext,
   usePluginAction,
   usePluginData,
+  type DataTableColumn,
   type PluginCompanySettingsPageProps,
+  type StatusBadgeVariant,
 } from "@paperclipai/plugin-sdk/ui";
 
 type HumanCompanyMembershipRole = "owner" | "admin" | "operator" | "viewer";
@@ -64,10 +75,19 @@ type MemberRecord = {
   grants: Array<{ permissionKey: string; scope: Record<string, unknown> | null }>;
 };
 
+type AgentRecord = {
+  id: string;
+  name: string;
+  role?: string | null;
+  title?: string | null;
+  status?: string | null;
+};
+
 type MemberAccessData = {
   companyId: string;
   warnings: Array<{ code: string; message: string }>;
   members: MemberRecord[];
+  agents?: AgentRecord[];
 };
 
 type LicenseState = {
@@ -84,13 +104,6 @@ type PolicySummary = {
   activeMemberCount: number;
   grantCount: number;
   advancedPolicyAvailable: false;
-};
-
-type AgentRecord = {
-  id: string;
-  name: string;
-  role?: string | null;
-  status?: string | null;
 };
 
 type IssueRecord = {
@@ -118,7 +131,19 @@ type Overview = {
   warnings: Array<{ code: string; message: string }>;
 };
 
+type AuditEntry = {
+  id: string;
+  actorType: string;
+  actorId: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  details: Record<string, unknown> | null;
+  createdAt: string;
+};
+
 type AdvancedPolicyData = {
+  companyId: string;
   summary: PolicySummary | null;
   warnings: Overview["warnings"];
   agents: AgentRecord[];
@@ -141,16 +166,7 @@ type AdvancedPolicyData = {
   }>;
   preview: DecisionRecord | null;
   explanation: DecisionRecord | null;
-  auditEntries: Array<{
-    id: string;
-    actorType: string;
-    actorId: string;
-    action: string;
-    entityType: string;
-    entityId: string;
-    details: Record<string, unknown> | null;
-    createdAt: string;
-  }>;
+  auditEntries: AuditEntry[];
 };
 
 const layoutStack: CSSProperties = {
@@ -160,32 +176,34 @@ const layoutStack: CSSProperties = {
 };
 
 const cardStyle: CSSProperties = {
-  border: "1px solid rgba(148, 163, 184, 0.28)",
+  border: "1px solid var(--border, #e2e8f0)",
   borderRadius: "8px",
-  padding: "16px 20px",
+  padding: "16px",
   display: "grid",
-  gap: "10px",
+  gap: "12px",
+  background: "var(--card, #ffffff)",
 };
 
 const subtleCardStyle: CSSProperties = {
-  border: "1px solid rgba(148, 163, 184, 0.22)",
+  border: "1px solid var(--border, #e2e8f0)",
   borderRadius: "8px",
-  padding: "14px",
+  padding: "12px",
   display: "grid",
-  gap: "10px",
+  gap: "8px",
+  background: "var(--background, transparent)",
 };
 
 const mutedTextStyle: CSSProperties = {
-  color: "rgba(100, 116, 139, 0.95)",
+  color: "var(--muted-foreground, #64748b)",
   fontSize: "0.9rem",
   lineHeight: 1.5,
 };
 
 const sectionHeadingStyle: CSSProperties = {
   fontSize: "0.75rem",
-  letterSpacing: "0.08em",
+  letterSpacing: "0.04em",
   textTransform: "uppercase",
-  color: "rgba(100, 116, 139, 0.95)",
+  color: "var(--muted-foreground, #64748b)",
 };
 
 const rowStyle: CSSProperties = {
@@ -203,10 +221,10 @@ const gridStyle: CSSProperties = {
 
 const inputStyle: CSSProperties = {
   width: "100%",
-  border: "1px solid rgba(148, 163, 184, 0.35)",
+  border: "1px solid var(--border, #cbd5e1)",
   borderRadius: "6px",
   padding: "8px 10px",
-  background: "transparent",
+  background: "var(--background, transparent)",
   color: "inherit",
   fontSize: "0.85rem",
 };
@@ -214,64 +232,93 @@ const inputStyle: CSSProperties = {
 const buttonStyle: CSSProperties = {
   padding: "7px 12px",
   borderRadius: "6px",
-  border: "1px solid rgba(148, 163, 184, 0.4)",
-  background: "transparent",
+  border: "1px solid var(--border, #cbd5e1)",
+  background: "var(--background, transparent)",
   color: "inherit",
   cursor: "pointer",
 };
 
 const primaryButtonStyle: CSSProperties = {
   ...buttonStyle,
-  background: "currentColor",
-  color: "Canvas",
-};
-
-const codeStyle: CSSProperties = {
-  margin: 0,
-  maxHeight: "240px",
-  overflow: "auto",
-  border: "1px solid rgba(148, 163, 184, 0.18)",
-  borderRadius: "6px",
-  padding: "10px",
-  fontSize: "0.75rem",
-  lineHeight: 1.45,
+  background: "var(--foreground, #0f172a)",
+  color: "var(--background, #ffffff)",
 };
 
 const warningStyle: CSSProperties = {
-  border: "1px solid rgba(234, 179, 8, 0.4)",
-  background: "rgba(234, 179, 8, 0.08)",
+  border: "1px solid var(--warning-border, #facc15)",
+  background: "var(--warning-muted, #fefce8)",
   borderRadius: "8px",
   padding: "10px 12px",
-  color: "rgba(120, 88, 0, 0.95)",
+  color: "var(--warning-foreground, #713f12)",
 };
 
-function JsonBlock({ value }: { value: unknown }) {
-  return <pre style={codeStyle}>{JSON.stringify(value, null, 2)}</pre>;
-}
-
-function Pill({ label, tone = "neutral" }: { label: string; tone?: "neutral" | "allow" | "deny" }) {
-  const colors = tone === "allow"
-    ? { border: "rgba(22, 163, 74, 0.5)", background: "rgba(22, 163, 74, 0.1)" }
-    : tone === "deny"
-      ? { border: "rgba(220, 38, 38, 0.5)", background: "rgba(220, 38, 38, 0.08)" }
-      : { border: "rgba(148, 163, 184, 0.35)", background: "transparent" };
-  return (
-    <span
-      style={{
-        border: `1px solid ${colors.border}`,
-        background: colors.background,
-        borderRadius: "999px",
-        padding: "2px 8px",
-        fontSize: "0.72rem",
-      }}
-    >
-      {label}
-    </span>
-  );
-}
+const fieldStyle: CSSProperties = {
+  display: "grid",
+  gap: "6px",
+};
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function statusForDecision(allowed: boolean): StatusBadgeVariant {
+  return allowed ? "ok" : "error";
+}
+
+function decisionLabel(allowed: boolean): string {
+  return allowed ? "✓ Allowed" : "✕ Denied";
+}
+
+function membershipStatusVariant(status: string): StatusBadgeVariant {
+  if (status === "active") return "ok";
+  if (status === "pending") return "pending";
+  if (status === "suspended" || status === "archived") return "warning";
+  return "info";
+}
+
+function formatPermission(permissionKey: string): string {
+  return PERMISSION_LABELS[permissionKey as PermissionKey] ?? permissionKey;
+}
+
+function formatScope(scope: Record<string, unknown> | null | undefined): string {
+  if (!scope || Object.keys(scope).length === 0) return "Any scope";
+  const parts = Object.entries(scope).map(([key, value]) => `${key}: ${String(value)}`);
+  return parts.join(", ");
+}
+
+function formatMode(value: string | null | undefined): string {
+  if (!value) return "Not set";
+  return value.split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+}
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function getPolicySection(policy: Record<string, unknown> | null | undefined, key: string): Record<string, unknown> {
+  const value = policy?.[key];
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function getPolicyString(policy: Record<string, unknown> | null | undefined, section: string, key: string, fallback: string) {
+  const value = getPolicySection(policy, section)[key];
+  return typeof value === "string" ? value : fallback;
+}
+
+function getPolicyBoolean(policy: Record<string, unknown> | null | undefined, section: string, key: string, fallback: boolean) {
+  const value = getPolicySection(policy, section)[key];
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function RawDisclosure({ label = "Raw response", data }: { label?: string; data: unknown }) {
+  return (
+    <details>
+      <summary style={{ ...mutedTextStyle, cursor: "pointer" }}>{label}</summary>
+      <JsonTree data={data} defaultExpandDepth={1} />
+    </details>
+  );
 }
 
 function CapabilityWarning({ warnings }: { warnings: Overview["warnings"] }) {
@@ -292,6 +339,15 @@ function CapabilityWarning({ warnings }: { warnings: Overview["warnings"] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function LoadingState({ label }: { label: string }) {
+  return (
+    <div style={rowStyle}>
+      <Spinner size="sm" label={label} />
+      <span style={mutedTextStyle}>{label}</span>
     </div>
   );
 }
@@ -327,31 +383,56 @@ function UnlicensedState({
         </div>
         <div>
           <button type="button" style={buttonStyle} disabled={activating} onClick={onActivate}>
-            {activating ? "Activating..." : "Activate for this company"}
+            {activating ? <LoadingState label="Activating" /> : "Activate for this company"}
           </button>
         </div>
-        <div style={mutedTextStyle}>
-          Company: <code>{companyId}</code>
-        </div>
+        <KeyValueList pairs={[{ label: "Company", value: <code>{companyId}</code> }]} />
       </div>
     </div>
   );
 }
 
-function getPolicySection(policy: Record<string, unknown> | null | undefined, key: string): Record<string, unknown> {
-  const value = policy?.[key];
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+type PrincipalProfile = {
+  label: string;
+  secondary: string;
+};
+
+function profileForPrincipal(member: MemberRecord, agents: AgentRecord[]): PrincipalProfile {
+  if (member.principalType === "agent") {
+    const agent = agents.find((entry) => entry.id === member.principalId);
+    if (agent) {
+      return {
+        label: agent.name,
+        secondary: [agent.title || agent.role, agent.status, agent.id].filter(Boolean).join(" / "),
+      };
+    }
+    return {
+      label: "Agent",
+      secondary: member.principalId,
+    };
+  }
+  if (member.principalId.includes("@")) {
+    const [localPart] = member.principalId.split("@");
+    return {
+      label: localPart.split(/[._-]/).filter(Boolean).map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ") || member.principalId,
+      secondary: member.principalId,
+    };
+  }
+  return {
+    label: "Board user",
+    secondary: member.principalId,
+  };
 }
 
-function getPolicyString(policy: Record<string, unknown> | null | undefined, section: string, key: string, fallback: string) {
-  const value = getPolicySection(policy, section)[key];
-  return typeof value === "string" ? value : fallback;
-}
-
-function getPolicyBoolean(policy: Record<string, unknown> | null | undefined, section: string, key: string, fallback: boolean) {
-  const value = getPolicySection(policy, section)[key];
-  return typeof value === "boolean" ? value : fallback;
-}
+type MemberTableRow = {
+  id: string;
+  member: MemberRecord;
+  principal: ReactNode;
+  role: ReactNode;
+  status: ReactNode;
+  grants: ReactNode;
+  action: ReactNode;
+};
 
 function MembersPanel({ companyId }: { companyId: string }) {
   const query = usePluginData<MemberAccessData>("memberAccess", { companyId });
@@ -364,10 +445,12 @@ function MembersPanel({ companyId }: { companyId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   const members = query.data?.members ?? [];
+  const agents = query.data?.agents ?? [];
   const editingMember = useMemo(
     () => members.find((member) => member.id === editingMemberId) ?? null,
     [members, editingMemberId],
   );
+  const editingProfile = editingMember ? profileForPrincipal(editingMember, agents) : null;
   const implicitGrantKeys = useMemo<PermissionKey[]>(
     () => (draftRole ? IMPLICIT_ROLE_GRANTS[draftRole] : []),
     [draftRole],
@@ -387,7 +470,7 @@ function MembersPanel({ companyId }: { companyId: string }) {
   }, [editingMember]);
 
   if (query.loading && !query.data) {
-    return <div style={mutedTextStyle}>Loading members...</div>;
+    return <LoadingState label="Loading members" />;
   }
 
   if (query.error) {
@@ -399,9 +482,10 @@ function MembersPanel({ companyId }: { companyId: string }) {
     );
   }
 
-  const humanMembers = members.filter((member) => member.principalType === "user");
+  const pendingHumans = members.filter((member) => member.principalType === "user" && member.status === "pending");
+  const activeHumans = members.filter((member) => member.principalType === "user" && member.status !== "pending");
   const agentMembers = members.filter((member) => member.principalType === "agent");
-  const closeDialog = () => {
+  const closeEditor = () => {
     setEditingMemberId(null);
     setError(null);
   };
@@ -432,32 +516,53 @@ function MembersPanel({ companyId }: { companyId: string }) {
       <CapabilityWarning warnings={query.data?.warnings ?? []} />
 
       <div style={cardStyle}>
-        <div style={rowStyle}>
-          <div style={sectionHeadingStyle}>Members</div>
+        <div style={{ ...rowStyle, justifyContent: "space-between" }}>
+          <div>
+            <div style={sectionHeadingStyle}>Members</div>
+            <strong>Company access</strong>
+          </div>
           <button type="button" style={buttonStyle} onClick={() => query.refresh()}>Refresh</button>
         </div>
         <div style={mutedTextStyle}>
-          Roles, status, and explicit permission grants for users and agents in this company. Saves through capability-gated plugin SDK calls; data lives in core.
+          Roles, membership status, and explicit permission grants for humans and agents in this company.
         </div>
-        {humanMembers.length === 0 && agentMembers.length === 0 ? (
+        {members.length === 0 ? (
           <div style={mutedTextStyle}>No company members yet.</div>
         ) : null}
-        <MembersTable members={humanMembers} label="Humans" emptyLabel="No human members" onEdit={setEditingMemberId} />
-        <MembersTable members={agentMembers} label="Agents" emptyLabel="No agent members" onEdit={setEditingMemberId} />
+        <MembersTable
+          members={pendingHumans}
+          agents={agents}
+          label="Pending humans"
+          emptyLabel="No pending join requests"
+          onEdit={setEditingMemberId}
+        />
+        <MembersTable
+          members={activeHumans}
+          agents={agents}
+          label="Humans"
+          emptyLabel="No active human members"
+          onEdit={setEditingMemberId}
+        />
+        <MembersTable
+          members={agentMembers}
+          agents={agents}
+          label="Agents"
+          emptyLabel="No agent members"
+          onEdit={setEditingMemberId}
+        />
       </div>
 
-      {editingMember ? (
-        <div style={cardStyle} role="dialog" aria-label="Edit member">
+      {editingMember && editingProfile ? (
+        <div style={cardStyle}>
           <div style={rowStyle}>
-            <div style={sectionHeadingStyle}>Edit member</div>
-            <Pill label={editingMember.principalType} />
+            <div style={sectionHeadingStyle}>Editing member</div>
+            <StatusBadge label={editingMember.principalType === "agent" ? "Agent" : "Human"} status="info" />
           </div>
-          <div style={mutedTextStyle}>
-            Principal <code>{editingMember.principalId}</code>
-          </div>
+          <strong>{editingProfile.label}</strong>
+          <div style={mutedTextStyle}>{editingProfile.secondary}</div>
 
           <div style={gridStyle}>
-            <label style={{ display: "grid", gap: "6px" }}>
+            <label style={fieldStyle}>
               <span style={sectionHeadingStyle}>Company role</span>
               <select
                 style={inputStyle}
@@ -470,7 +575,7 @@ function MembersPanel({ companyId }: { companyId: string }) {
                 ))}
               </select>
             </label>
-            <label style={{ display: "grid", gap: "6px" }}>
+            <label style={fieldStyle}>
               <span style={sectionHeadingStyle}>Membership status</span>
               <select
                 style={inputStyle}
@@ -487,7 +592,7 @@ function MembersPanel({ companyId }: { companyId: string }) {
           <div style={subtleCardStyle}>
             <div style={rowStyle}>
               <strong>Implicit grants from role</strong>
-              {draftRole ? <Pill label={HUMAN_ROLE_LABELS[draftRole]} /> : <Pill label="No role" />}
+              <StatusBadge label={draftRole ? HUMAN_ROLE_LABELS[draftRole] : "No role"} status={draftRole ? "info" : "pending"} />
             </div>
             <div style={mutedTextStyle}>
               {draftRole
@@ -497,7 +602,7 @@ function MembersPanel({ companyId }: { companyId: string }) {
             {implicitGrantKeys.length > 0 ? (
               <div style={rowStyle}>
                 {implicitGrantKeys.map((permissionKey) => (
-                  <Pill key={permissionKey} label={PERMISSION_LABELS[permissionKey]} />
+                  <StatusBadge key={permissionKey} label={PERMISSION_LABELS[permissionKey]} status="info" />
                 ))}
               </div>
             ) : null}
@@ -506,14 +611,14 @@ function MembersPanel({ companyId }: { companyId: string }) {
           <div>
             <div style={sectionHeadingStyle}>Explicit grants</div>
             <div style={mutedTextStyle}>
-              Explicit grants persist even when the role changes. Scoped assignment grants are managed in the policy editor below.
+              Explicit grants persist when the role changes. Scoped assignment grants are managed in the policy editor below.
             </div>
             <div style={{ ...gridStyle, marginTop: "8px" }}>
               {MEMBER_PERMISSION_KEYS.map((permissionKey) => {
                 const isImplicit = implicitGrantKeys.includes(permissionKey);
                 const isChecked = draftGrants.has(permissionKey);
                 return (
-                  <label key={permissionKey} style={subtleCardStyle}>
+                  <div key={permissionKey} style={subtleCardStyle}>
                     <label style={{ ...rowStyle, gap: "10px" }}>
                       <input
                         type="checkbox"
@@ -540,7 +645,7 @@ function MembersPanel({ companyId }: { companyId: string }) {
                     {isChecked ? (
                       <div style={mutedTextStyle}>Stored explicitly for this member.</div>
                     ) : null}
-                  </label>
+                  </div>
                 );
               })}
             </div>
@@ -549,11 +654,11 @@ function MembersPanel({ companyId }: { companyId: string }) {
           {error ? <div style={warningStyle}><strong>Could not save:</strong> {error}</div> : null}
 
           <div style={rowStyle}>
-            <button type="button" style={buttonStyle} disabled={busy} onClick={closeDialog}>
+            <button type="button" style={buttonStyle} disabled={busy} onClick={closeEditor}>
               Cancel
             </button>
             <button type="button" style={primaryButtonStyle} disabled={busy} onClick={() => void save()}>
-              {busy ? "Saving..." : "Save access"}
+              {busy ? <LoadingState label="Saving access" /> : "Save access"}
             </button>
           </div>
         </div>
@@ -564,39 +669,184 @@ function MembersPanel({ companyId }: { companyId: string }) {
 
 function MembersTable({
   members,
+  agents,
   label,
   emptyLabel,
   onEdit,
 }: {
   members: MemberRecord[];
+  agents: AgentRecord[];
   label: string;
   emptyLabel: string;
   onEdit: (memberId: string) => void;
 }) {
+  const columns: DataTableColumn<MemberTableRow>[] = [
+    { key: "principal", header: "Principal", render: (_value, row) => row.principal },
+    { key: "role", header: "Role", render: (_value, row) => row.role, width: "140px" },
+    { key: "status", header: "Status", render: (_value, row) => row.status, width: "120px" },
+    { key: "grants", header: "Grants", render: (_value, row) => row.grants },
+    { key: "action", header: "", render: (_value, row) => row.action, width: "80px" },
+  ];
+  const rows: MemberTableRow[] = members.map((member) => {
+    const profile = profileForPrincipal(member, agents);
+    return {
+      id: member.id,
+      member,
+      principal: (
+        <div style={{ display: "grid", gap: "2px" }}>
+          <strong>{profile.label}</strong>
+          <span style={mutedTextStyle}>{profile.secondary}</span>
+        </div>
+      ),
+      role: member.membershipRole ? formatMode(member.membershipRole) : "Unset",
+      status: <StatusBadge label={formatMode(member.status)} status={membershipStatusVariant(member.status)} />,
+      grants: `${member.grants.length} explicit grant${member.grants.length === 1 ? "" : "s"}`,
+      action: <button type="button" style={buttonStyle} onClick={() => onEdit(member.id)}>Edit</button>,
+    };
+  });
   return (
     <div style={subtleCardStyle}>
       <div style={rowStyle}>
         <strong>{label}</strong>
-        <Pill label={`${members.length}`} />
+        <StatusBadge label={`${members.length}`} status={members.length > 0 ? "info" : "pending"} />
       </div>
-      {members.length === 0 ? (
-        <div style={mutedTextStyle}>{emptyLabel}</div>
-      ) : (
-        <div style={{ display: "grid", gap: "6px" }}>
-          {members.map((member) => (
-            <div key={member.id} style={{ ...rowStyle, justifyContent: "space-between" }}>
-              <div style={{ display: "grid", gap: "2px" }}>
-                <strong>{member.principalId}</strong>
-                <div style={mutedTextStyle}>
-                  Role <code>{member.membershipRole ?? "unset"}</code> • Status <code>{member.status}</code> • {member.grants.length} grant{member.grants.length === 1 ? "" : "s"}
-                </div>
-              </div>
-              <button type="button" style={buttonStyle} onClick={() => onEdit(member.id)}>Edit</button>
-            </div>
-          ))}
-        </div>
-      )}
+      <DataTable
+        columns={columns as unknown as DataTableColumn<Record<string, unknown>>[]}
+        rows={rows as unknown as Record<string, unknown>[]}
+        emptyMessage={emptyLabel}
+      />
     </div>
+  );
+}
+
+function GrantRows({ grants }: { grants: AdvancedPolicyData["actorGrants"] }) {
+  if (grants.length === 0) {
+    return <div style={mutedTextStyle}>No assignment grants for this actor yet.</div>;
+  }
+  return (
+    <div style={{ display: "grid", gap: "8px" }}>
+      {grants.map((grant, index) => (
+        <div key={`${grant.permissionKey}-${index}`} style={{ ...rowStyle, justifyContent: "space-between", borderTop: index === 0 ? undefined : "1px solid var(--border, #e2e8f0)", paddingTop: index === 0 ? 0 : "8px" }}>
+          <StatusBadge label={formatPermission(grant.permissionKey)} status="info" />
+          <span style={mutedTextStyle}>{formatScope(grant.scope)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CurrentAgentPolicy({ policy }: { policy: AdvancedPolicyData["agentPolicy"] }) {
+  if (!policy?.policy) {
+    return <div style={mutedTextStyle}>No saved policy. Saving below will create one.</div>;
+  }
+  const visibilityMode = getPolicyString(policy.policy, "agentVisibility", "mode", "discoverable");
+  const assignmentMode = getPolicyString(policy.policy, "assignmentPolicy", "mode", "company_default");
+  const requiresApproval = getPolicyBoolean(policy.policy, "protectedAgent", "requiresApproval", false);
+  const approvalReason = getPolicyString(policy.policy, "protectedAgent", "approvalReason", "");
+  return (
+    <KeyValueList
+      pairs={[
+        {
+          label: "Visibility",
+          value: (
+            <span title="Controls whether this agent appears in assignment and discovery surfaces.">
+              {formatMode(visibilityMode)}
+            </span>
+          ),
+        },
+        {
+          label: "Assignment",
+          value: (
+            <span title="Controls whether assignment follows company defaults or protected-agent rules.">
+              {formatMode(assignmentMode)}
+            </span>
+          ),
+        },
+        {
+          label: "Protected agent",
+          value: requiresApproval
+            ? `Requires approval${approvalReason ? `: "${approvalReason}"` : ""}`
+            : "No approval required",
+        },
+      ]}
+    />
+  );
+}
+
+function DecisionCard({ title, decision }: { title: string; decision: DecisionRecord | null }) {
+  if (!decision) return null;
+  return (
+    <div style={cardStyle}>
+      <div style={rowStyle}>
+        <div style={sectionHeadingStyle}>{title}</div>
+        <StatusBadge label={decisionLabel(decision.allowed)} status={statusForDecision(decision.allowed)} />
+      </div>
+      <div>{decision.explanation}</div>
+      <KeyValueList
+        pairs={[
+          { label: "Reason", value: formatMode(decision.reason) },
+          { label: "Action", value: formatPermission(decision.action) },
+          {
+            label: "Matching grant",
+            value: decision.grant ? `${formatPermission(decision.grant.permissionKey)} / ${formatScope(decision.grant.scope)}` : "No matching grant",
+          },
+        ]}
+      />
+      <RawDisclosure data={decision} />
+    </div>
+  );
+}
+
+function AuthorizationAudit({
+  entries,
+  agents,
+}: {
+  entries: AuditEntry[];
+  agents: AgentRecord[];
+}) {
+  type AuditRow = {
+    id: string;
+    time: string;
+    actor: ReactNode;
+    action: string;
+    resource: string;
+    decision: ReactNode;
+    details: ReactNode;
+  };
+  const columns: DataTableColumn<AuditRow>[] = [
+    { key: "time", header: "Time", render: (_value, row) => row.time, width: "170px" },
+    { key: "actor", header: "Actor", render: (_value, row) => row.actor },
+    { key: "action", header: "Action", render: (_value, row) => row.action },
+    { key: "resource", header: "Resource", render: (_value, row) => row.resource },
+    { key: "decision", header: "Decision", render: (_value, row) => row.decision, width: "120px" },
+    { key: "details", header: "Details", render: (_value, row) => row.details },
+  ];
+  const rows: AuditRow[] = entries.map((entry) => {
+    const agent = entry.actorType === "agent" ? agents.find((candidate) => candidate.id === entry.actorId) : null;
+    const decision = entry.details?.decision === "deny" ? false : entry.details?.decision === "allow" ? true : null;
+    return {
+      id: entry.id,
+      time: formatDate(entry.createdAt),
+      actor: (
+        <div style={{ display: "grid", gap: "2px" }}>
+          <strong>{agent?.name ?? formatMode(entry.actorType)}</strong>
+          <span style={mutedTextStyle}>{entry.actorId}</span>
+        </div>
+      ),
+      action: formatPermission(entry.action),
+      resource: `${entry.entityType} / ${entry.entityId}`,
+      decision: decision === null
+        ? <StatusBadge label="Unknown" status="pending" />
+        : <StatusBadge label={decisionLabel(decision)} status={statusForDecision(decision)} />,
+      details: <RawDisclosure label="Details" data={entry.details ?? {}} />,
+    };
+  });
+  return (
+    <DataTable
+      columns={columns as unknown as DataTableColumn<Record<string, unknown>>[]}
+      rows={rows as unknown as Record<string, unknown>[]}
+      emptyMessage="No authorization decisions in this filter window yet. Adjust the filters above to broaden the audit search."
+    />
   );
 }
 
@@ -638,7 +888,9 @@ function AdvancedPolicyEditor({ companyId }: { companyId: string }) {
     if (!data) return;
     if (!actorAgentId && data.selected.actorAgentId) setActorAgentId(data.selected.actorAgentId);
     if (!targetAgentId && data.selected.targetAgentId) setTargetAgentId(data.selected.targetAgentId);
-  }, [actorAgentId, data, targetAgentId]);
+    if (!projectId && data.selected.projectId) setProjectId(data.selected.projectId);
+    if (!issueId && data.selected.issueId) setIssueId(data.selected.issueId);
+  }, [actorAgentId, data, issueId, projectId, targetAgentId]);
 
   useEffect(() => {
     const policy = data?.agentPolicy?.policy;
@@ -648,13 +900,10 @@ function AdvancedPolicyEditor({ companyId }: { companyId: string }) {
     setApprovalReason(getPolicyString(policy, "protectedAgent", "approvalReason", ""));
   }, [data?.agentPolicy?.resourceId, data?.agentPolicy?.updatedAt]);
 
-  const projectOptions = useMemo(() => {
-    const ids = new Set<string>();
-    for (const issue of data?.issues ?? []) {
-      if (issue.projectId) ids.add(issue.projectId);
-    }
-    return [...ids];
-  }, [data?.issues]);
+  const issueOptions = useMemo(
+    () => (data?.issues ?? []).filter((issue) => !projectId || issue.projectId === projectId),
+    [data?.issues, projectId],
+  );
 
   async function run(label: string, action: () => Promise<unknown>) {
     setBusyAction(label);
@@ -670,7 +919,7 @@ function AdvancedPolicyEditor({ companyId }: { companyId: string }) {
   }
 
   if (query.loading && !data) {
-    return <div style={mutedTextStyle}>Loading advanced policy editors...</div>;
+    return <LoadingState label="Loading advanced policy editors" />;
   }
 
   if (query.error) {
@@ -682,69 +931,85 @@ function AdvancedPolicyEditor({ companyId }: { companyId: string }) {
     );
   }
 
+  const hasPreviewSelection = Boolean(actorAgentId && targetAgentId);
+
   return (
     <div style={layoutStack}>
       <CapabilityWarning warnings={data?.warnings ?? []} />
 
       <div style={gridStyle}>
-        <div style={subtleCardStyle}>
-          <div style={rowStyle}>
-            <strong>Mode</strong>
-            <Pill label={data?.summary?.permissionsMode ?? "unknown"} />
-          </div>
-          <div style={mutedTextStyle}>
-            Active members {data?.summary?.activeMemberCount ?? 0} / {data?.summary?.memberCount ?? 0}. Explicit grants {data?.summary?.grantCount ?? 0}.
-          </div>
-        </div>
-        <div style={subtleCardStyle}>
-          <div style={rowStyle}>
-            <strong>Preview Decision</strong>
-            <Pill label={data?.preview?.allowed ? "allow" : "deny"} tone={data?.preview?.allowed ? "allow" : "deny"} />
-          </div>
-          <div style={mutedTextStyle}>{data?.preview?.explanation ?? "Select an actor and target agent."}</div>
-        </div>
+        <MetricCard label="Mode" value={formatMode(data?.summary?.permissionsMode ?? "unknown")} />
+        <MetricCard label="Active members" value={`${data?.summary?.activeMemberCount ?? 0} / ${data?.summary?.memberCount ?? 0}`} />
+        <MetricCard label="Explicit grants" value={data?.summary?.grantCount ?? 0} />
       </div>
 
-      <div style={gridStyle}>
-        <label style={{ display: "grid", gap: "6px" }}>
-          <span style={sectionHeadingStyle}>Actor agent</span>
-          <select style={inputStyle} value={actorAgentId} onChange={(event) => setActorAgentId(event.target.value)}>
-            {(data?.agents ?? []).map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
-          </select>
-        </label>
-        <label style={{ display: "grid", gap: "6px" }}>
-          <span style={sectionHeadingStyle}>Target agent</span>
-          <select style={inputStyle} value={targetAgentId} onChange={(event) => setTargetAgentId(event.target.value)}>
-            {(data?.agents ?? []).map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
-          </select>
-        </label>
-        <label style={{ display: "grid", gap: "6px" }}>
-          <span style={sectionHeadingStyle}>Project scope</span>
-          <select style={inputStyle} value={projectId} onChange={(event) => setProjectId(event.target.value)}>
-            <option value="">Any project</option>
-            {projectOptions.map((id) => <option key={id} value={id}>{id}</option>)}
-          </select>
-        </label>
-        <label style={{ display: "grid", gap: "6px" }}>
-          <span style={sectionHeadingStyle}>Issue context</span>
-          <select style={inputStyle} value={issueId} onChange={(event) => setIssueId(event.target.value)}>
-            <option value="">No issue</option>
-            {(data?.issues ?? []).map((issue) => <option key={issue.id} value={issue.id}>{issue.title}</option>)}
-          </select>
-        </label>
+      <div style={{ borderTop: "1px solid var(--border, #e2e8f0)", paddingTop: "16px", display: "grid", gap: "12px" }}>
+        <div>
+          <div style={sectionHeadingStyle}>Policy preview</div>
+          <strong>Check assignment decisions before saving policy changes</strong>
+        </div>
+        <div style={gridStyle}>
+          <label style={fieldStyle}>
+            <span style={sectionHeadingStyle}>Actor agent</span>
+            <AssigneePicker
+              companyId={companyId}
+              value={actorAgentId ? `agent:${actorAgentId}` : ""}
+              includeUsers={false}
+              placeholder="Select actor agent"
+              noneLabel="No actor"
+              onChange={(_value, selection) => setActorAgentId(selection.assigneeAgentId ?? "")}
+            />
+          </label>
+          <label style={fieldStyle}>
+            <span style={sectionHeadingStyle}>Target agent</span>
+            <AssigneePicker
+              companyId={companyId}
+              value={targetAgentId ? `agent:${targetAgentId}` : ""}
+              includeUsers={false}
+              placeholder="Select target agent"
+              noneLabel="No target"
+              onChange={(_value, selection) => setTargetAgentId(selection.assigneeAgentId ?? "")}
+            />
+          </label>
+          <label style={fieldStyle}>
+            <span style={sectionHeadingStyle}>Project scope</span>
+            <ProjectPicker
+              companyId={companyId}
+              value={projectId}
+              placeholder="Any project"
+              noneLabel="Any project"
+              onChange={setProjectId}
+            />
+          </label>
+          <label style={fieldStyle}>
+            <span style={sectionHeadingStyle}>Issue context</span>
+            <select style={inputStyle} value={issueId} onChange={(event) => setIssueId(event.target.value)}>
+              <option value="">No issue</option>
+              {issueOptions.map((issue) => <option key={issue.id} value={issue.id}>{issue.title}</option>)}
+            </select>
+          </label>
+        </div>
+        {!hasPreviewSelection ? (
+          <div style={mutedTextStyle}>Select an actor and target agent to preview a policy decision.</div>
+        ) : (
+          <div style={gridStyle}>
+            <DecisionCard title="Preview Decision" decision={data?.preview ?? null} />
+            <DecisionCard title="Permission Explanation" decision={data?.explanation ?? null} />
+          </div>
+        )}
       </div>
 
       <div style={gridStyle}>
         <div style={cardStyle}>
           <div style={sectionHeadingStyle}>Agent Visibility</div>
-          <label style={{ display: "grid", gap: "6px" }}>
+          <label style={fieldStyle}>
             <span>Directory mode</span>
             <select style={inputStyle} value={visibilityMode} onChange={(event) => setVisibilityMode(event.target.value)}>
               <option value="discoverable">Discoverable</option>
               <option value="private">Private</option>
             </select>
           </label>
-          <label style={{ display: "grid", gap: "6px" }}>
+          <label style={fieldStyle}>
             <span>Assignment mode</span>
             <select style={inputStyle} value={assignmentMode} onChange={(event) => setAssignmentMode(event.target.value)}>
               <option value="company_default">Company default</option>
@@ -755,7 +1020,10 @@ function AdvancedPolicyEditor({ companyId }: { companyId: string }) {
             <input type="checkbox" checked={requiresApproval} onChange={(event) => setRequiresApproval(event.target.checked)} />
             <span>Require approval for protected assignment</span>
           </label>
-          <input style={inputStyle} placeholder="Approval reason" value={approvalReason} onChange={(event) => setApprovalReason(event.target.value)} />
+          <label style={fieldStyle}>
+            <span>Approval reason</span>
+            <input style={inputStyle} value={approvalReason} onChange={(event) => setApprovalReason(event.target.value)} />
+          </label>
           <button
             type="button"
             style={primaryButtonStyle}
@@ -769,13 +1037,13 @@ function AdvancedPolicyEditor({ companyId }: { companyId: string }) {
               approvalReason,
             }))}
           >
-            {busyAction === "policy" ? "Saving..." : "Save agent policy"}
+            {busyAction === "policy" ? <LoadingState label="Saving agent policy" /> : "Save agent policy"}
           </button>
         </div>
 
         <div style={cardStyle}>
           <div style={sectionHeadingStyle}>Assignment Policy</div>
-          <label style={{ display: "grid", gap: "6px" }}>
+          <label style={fieldStyle}>
             <span>Grant mode</span>
             <select style={inputStyle} value={grantMode} onChange={(event) => setGrantMode(event.target.value)}>
               <option value="scoped_agent">Scoped to selected target</option>
@@ -795,58 +1063,66 @@ function AdvancedPolicyEditor({ companyId }: { companyId: string }) {
               mode: grantMode,
             }))}
           >
-            {busyAction === "grants" ? "Saving..." : "Save assignment grants"}
+            {busyAction === "grants" ? <LoadingState label="Saving assignment grants" /> : "Save assignment grants"}
           </button>
-          <JsonBlock value={data?.actorGrants ?? []} />
-        </div>
-      </div>
-
-      <div style={gridStyle}>
-        <div style={cardStyle}>
-          <div style={sectionHeadingStyle}>Permission Explanation</div>
-          <div style={rowStyle}>
-            <Pill label={data?.explanation?.reason ?? "unavailable"} tone={data?.explanation?.allowed ? "allow" : "deny"} />
-            <span style={mutedTextStyle}>{data?.explanation?.explanation ?? "No explanation returned."}</span>
-          </div>
-          <JsonBlock value={data?.explanation ?? null} />
-        </div>
-        <div style={cardStyle}>
-          <div style={sectionHeadingStyle}>Current Agent Policy</div>
-          <JsonBlock value={data?.agentPolicy?.policy ?? null} />
+          <GrantRows grants={data?.actorGrants ?? []} />
         </div>
       </div>
 
       <div style={cardStyle}>
-        <div style={rowStyle}>
-          <div style={sectionHeadingStyle}>Authorization Audit</div>
+        <div style={sectionHeadingStyle}>Current Agent Policy</div>
+        <CurrentAgentPolicy policy={data?.agentPolicy ?? null} />
+      </div>
+
+      <div style={cardStyle}>
+        <div style={{ ...rowStyle, justifyContent: "space-between" }}>
+          <div>
+            <div style={sectionHeadingStyle}>Authorization Audit</div>
+            <strong>Recent authorization decisions</strong>
+          </div>
           <button type="button" style={buttonStyle} onClick={() => query.refresh()}>Refresh</button>
         </div>
         <div style={{ ...gridStyle, gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))" }}>
-          <input style={inputStyle} placeholder="Action" value={auditAction} onChange={(event) => setAuditAction(event.target.value)} />
-          <select style={inputStyle} value={auditActorType} onChange={(event) => setAuditActorType(event.target.value)}>
-            <option value="">Any actor</option>
-            <option value="agent">Agent</option>
-            <option value="user">User</option>
-            <option value="plugin">Plugin</option>
-            <option value="system">System</option>
-          </select>
-          <input style={inputStyle} placeholder="Resource type" value={auditEntityType} onChange={(event) => setAuditEntityType(event.target.value)} />
-          <input style={inputStyle} placeholder="Resource id" value={auditEntityId} onChange={(event) => setAuditEntityId(event.target.value)} />
-          <select style={inputStyle} value={auditDecision} onChange={(event) => setAuditDecision(event.target.value)}>
-            <option value="">Any decision</option>
-            <option value="allow">Allow</option>
-            <option value="deny">Deny</option>
-          </select>
+          <label style={fieldStyle}>
+            <span>Action</span>
+            <input style={inputStyle} value={auditAction} onChange={(event) => setAuditAction(event.target.value)} />
+          </label>
+          <label style={fieldStyle}>
+            <span>Actor type</span>
+            <select style={inputStyle} value={auditActorType} onChange={(event) => setAuditActorType(event.target.value)}>
+              <option value="">Any actor</option>
+              <option value="agent">Agent</option>
+              <option value="user">User</option>
+              <option value="plugin">Plugin</option>
+              <option value="system">System</option>
+            </select>
+          </label>
+          <label style={fieldStyle}>
+            <span>Resource type</span>
+            <input style={inputStyle} value={auditEntityType} onChange={(event) => setAuditEntityType(event.target.value)} />
+          </label>
+          <label style={fieldStyle}>
+            <span>Resource id</span>
+            <input style={inputStyle} value={auditEntityId} onChange={(event) => setAuditEntityId(event.target.value)} />
+          </label>
+          <label style={fieldStyle}>
+            <span>Decision</span>
+            <select style={inputStyle} value={auditDecision} onChange={(event) => setAuditDecision(event.target.value)}>
+              <option value="">Any decision</option>
+              <option value="allow">Allow</option>
+              <option value="deny">Deny</option>
+            </select>
+          </label>
         </div>
-        <JsonBlock value={data?.auditEntries ?? []} />
+        <AuthorizationAudit entries={data?.auditEntries ?? []} agents={data?.agents ?? []} />
       </div>
 
-      {lastResult ? <JsonBlock value={lastResult} /> : null}
+      {lastResult ? <RawDisclosure label="Last saved raw response" data={lastResult} /> : null}
     </div>
   );
 }
 
-export function EePermissionsCompanySettingsPage(_props: PluginCompanySettingsPageProps) {
+function EePermissionsCompanySettingsPageContent(_props: PluginCompanySettingsPageProps) {
   const hostContext = useHostContext();
   const companyId = hostContext.companyId;
   const overview = usePluginData<Overview>("overview", companyId ? { companyId } : {});
@@ -860,7 +1136,7 @@ export function EePermissionsCompanySettingsPage(_props: PluginCompanySettingsPa
     return (
       <div style={layoutStack}>
         <div style={cardStyle}>
-          <div style={mutedTextStyle}>Loading permissions overview...</div>
+          <LoadingState label="Loading permissions overview" />
         </div>
       </div>
     );
@@ -885,7 +1161,7 @@ export function EePermissionsCompanySettingsPage(_props: PluginCompanySettingsPa
     return (
       <div style={layoutStack}>
         <div style={cardStyle}>
-          <div style={mutedTextStyle}>No data returned.</div>
+          <div style={mutedTextStyle}>No permissions data returned yet.</div>
         </div>
       </div>
     );
@@ -910,12 +1186,14 @@ export function EePermissionsCompanySettingsPage(_props: PluginCompanySettingsPa
     <div style={layoutStack}>
       <div style={cardStyle}>
         <div style={rowStyle}>
-          <div style={sectionHeadingStyle}>Paperclip EE Permissions</div>
-          <Pill label="active" tone="allow" />
-        </div>
-        <strong>Advanced policy editing is active</strong>
-        <div style={mutedTextStyle}>
-          Policy data stays in core and this plugin edits it through capability-gated SDK calls. If the plugin is unavailable later, existing restrictions remain server-enforced.
+          <strong>Advanced policy editing is active</strong>
+          <StatusBadge label="Active" status="ok" />
+          <details>
+            <summary style={{ ...mutedTextStyle, cursor: "pointer" }}>About enforcement</summary>
+            <div style={mutedTextStyle}>
+              Policy data stays in core. If this plugin is unavailable later, existing restrictions remain server-enforced.
+            </div>
+          </details>
         </div>
         <div>
           <button
@@ -929,7 +1207,7 @@ export function EePermissionsCompanySettingsPage(_props: PluginCompanySettingsPa
                 .finally(() => setActivationBusy(false));
             }}
           >
-            {activationBusy ? "Updating..." : "Deactivate"}
+            {activationBusy ? <LoadingState label="Updating" /> : "Deactivate"}
           </button>
         </div>
       </div>
@@ -937,5 +1215,13 @@ export function EePermissionsCompanySettingsPage(_props: PluginCompanySettingsPa
       <MembersPanel companyId={companyId} />
       <AdvancedPolicyEditor companyId={companyId} />
     </div>
+  );
+}
+
+export function EePermissionsCompanySettingsPage(props: PluginCompanySettingsPageProps) {
+  return (
+    <ErrorBoundary fallback={<div style={warningStyle}>The Paperclip EE permissions UI could not render.</div>}>
+      <EePermissionsCompanySettingsPageContent {...props} />
+    </ErrorBoundary>
   );
 }
