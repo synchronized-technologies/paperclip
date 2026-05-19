@@ -209,7 +209,7 @@ describe("CompanyAccess", () => {
 
     expect(container.textContent).toContain("Manage the people who can work in Paperclip");
     expect(container.textContent).toContain("Members can collaborate across the company by default");
-    expect(container.textContent).toContain("Advanced permission controls are available in Paperclip EE");
+    expect(container.textContent).toContain("Core keeps this page focused on membership");
     expect(container.textContent).toContain("Humans");
     expect(container.textContent).toContain("Pending human joins");
     expect(container.textContent).toContain("User account");
@@ -404,7 +404,7 @@ describe("CompanyAccess", () => {
     });
   });
 
-  it("redirects legacy access deep links to the EE permissions route when installed", async () => {
+  it("redirects legacy access deep links to the permissions extension route when installed", async () => {
     mockUsePluginSlots.mockReturnValue({
       slots: [
         {
@@ -412,7 +412,7 @@ describe("CompanyAccess", () => {
           id: "permissions",
           displayName: "Permissions",
           routePath: "permissions",
-          pluginKey: "paperclip-ee",
+          pluginKey: "permissions-extension",
         },
       ],
       isLoading: false,
@@ -440,7 +440,7 @@ describe("CompanyAccess", () => {
     });
   });
 
-  it("shows a read-only EE unavailable fallback for legacy access deep links", async () => {
+  it("shows a read-only unavailable fallback for legacy access deep links", async () => {
     const root = createRoot(container);
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -456,7 +456,7 @@ describe("CompanyAccess", () => {
     await flushReact();
 
     expect(container.textContent).toContain("Advanced Permissions");
-    expect(container.textContent).toContain("Paperclip EE unavailable");
+    expect(container.textContent).toContain("Advanced permissions unavailable");
     expect(container.textContent).toContain("Open Members");
     expect(container.textContent).toContain("Open Invites");
 

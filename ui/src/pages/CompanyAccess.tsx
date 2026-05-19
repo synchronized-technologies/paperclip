@@ -244,7 +244,7 @@ export function CompanyAccess() {
           Manage the people who can work in {selectedCompany?.name}. Members can collaborate across the company by default.
         </p>
         <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
-          Advanced permission controls are available in Paperclip EE. Core keeps this page focused on membership, invite approvals, and safe member removal.
+          Core keeps this page focused on membership, invite approvals, and safe member removal.
         </div>
       </div>
 
@@ -545,7 +545,7 @@ export function CompanyAccessLegacyRoute() {
   }
 
   if (isLoading) {
-    return <div className="text-sm text-muted-foreground">Checking for Paperclip EE permissions...</div>;
+    return <div className="text-sm text-muted-foreground">Checking for advanced permission extensions...</div>;
   }
 
   return (
@@ -556,15 +556,15 @@ export function CompanyAccessLegacyRoute() {
           <h1 className="text-lg font-semibold">Advanced Permissions</h1>
         </div>
         <p className="text-sm text-muted-foreground">
-          Advanced access, scoped assignment, and explicit grant controls are now owned by the Paperclip EE Permissions plugin.
+          Advanced access, scoped assignment, and explicit grant controls are provided by installed company settings extensions.
         </p>
       </div>
 
       <div className="space-y-4 rounded-xl border border-border px-5 py-5">
         <div className="space-y-2">
-          <h2 className="text-sm font-semibold">Paperclip EE unavailable</h2>
+          <h2 className="text-sm font-semibold">Advanced permissions unavailable</h2>
           <p className="text-sm text-muted-foreground">
-            Core Paperclip keeps enforcing company boundaries and any existing restrictive policy data, but editing advanced permissions requires Paperclip EE.
+            Core Paperclip keeps enforcing company boundaries and any existing restrictive policy data, but editing advanced permissions requires an installed extension.
           </p>
           {errorMessage ? (
             <p className="text-sm text-destructive">Plugin extensions unavailable: {errorMessage}</p>

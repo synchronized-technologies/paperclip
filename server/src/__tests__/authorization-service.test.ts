@@ -233,7 +233,7 @@ describeEmbeddedPostgres("authorization service", () => {
             requiresApproval: true,
             approvalReason: "Production deployment authority",
           },
-          managedBy: "paperclip-ee-permissions",
+          managedBy: "permissions-extension",
         },
       },
     });
@@ -270,7 +270,7 @@ describeEmbeddedPostgres("authorization service", () => {
           protectedAgent: {
             requiresApproval: false,
           },
-          managedBy: "paperclip-ee-permissions",
+          managedBy: "permissions-extension",
         },
       },
     });
