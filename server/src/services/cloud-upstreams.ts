@@ -28,7 +28,7 @@ import {
   projects,
   routines,
 } from "@paperclipai/db";
-import { badRequest, notFound } from "../errors.js";
+import { badRequest, HttpError, notFound } from "../errors.js";
 import { companyPortabilityService } from "./company-portability.js";
 
 const DEFAULT_SCOPES = ["upstream_import:preview", "upstream_import:write", "upstream_import:read"];
@@ -380,13 +380,14 @@ export function cloudUpstreamService(db: Db, options: { instanceId?: string } = 
         return finalRun;
       } catch (error) {
         const failedAt = new Date();
+        const failure = cloudUpstreamRemoteFailureReport(error);
         return updateRun(runId, {
           status: "failed",
           activeStep: "push",
           progressPercent: 100,
           events: [
             ...initialEvents,
-            event(failedAt.toISOString(), "push", "failed", error instanceof Error ? error.message : String(error)),
+            event(failedAt.toISOString(), "push", "failed", failure.errorMessage ?? failure.error),
           ],
           report: {
             runId,
@@ -394,7 +395,7 @@ export function cloudUpstreamService(db: Db, options: { instanceId?: string } = 
             manifestHash: bundle.manifest.manifestHash,
             idempotencyKey: bundle.manifest.idempotencyKey,
             retryOfRunId: input.retryOfRunId ?? null,
-            error: error instanceof Error ? error.message : String(error),
+            ...failure,
           },
           completedAt: failedAt,
         });
@@ -927,6 +928,32 @@ async function parseRemoteResponse(response: Response): Promise<unknown> {
     throw badRequest(message, parsed);
   }
   return parsed;
+}
+
+export function cloudUpstreamRemoteFailureReport(error: unknown): {
+  error: string;
+  errorMessage?: string;
+  details?: unknown;
+} {
+  const fallback = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof HttpError)) {
+    return { error: fallback };
+  }
+  const remote = remoteErrorBody(error.details);
+  return {
+    error: remote.error ?? error.message,
+    ...(remote.message ? { errorMessage: remote.message } : {}),
+    ...(error.details !== undefined ? { details: error.details } : {}),
+  };
+}
+
+function remoteErrorBody(details: unknown): { error?: string; message?: string } {
+  const record = optionalObject(details);
+  if (!record) return {};
+  return {
+    error: optionalString(record.error) ?? undefined,
+    message: optionalString(record.message) ?? undefined,
+  };
 }
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
