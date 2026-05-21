@@ -110,6 +110,7 @@ import {
 } from "../services/issue-execution-policy.js";
 import { parseIssueExecutionWorkspaceSettings } from "../services/execution-workspace-policy.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
+import { triggerQaForPreviewUrl } from "../services/qa-preview-orchestration.js";
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
 const updateIssueRouteSchema = updateIssueSchema.extend({
@@ -2852,6 +2853,21 @@ export function issueRoutes(
       actor,
       workProductChanged: true,
     });
+
+    // When a preview URL work product is created, wake QA agents automatically.
+    if (product.type === "preview_url" && product.url) {
+      void triggerQaForPreviewUrl(
+        { listAgents: (cid) => agentsSvc.list(cid), wakeup: (aid, opts) => heartbeat.wakeup(aid, opts) },
+        {
+          companyId: issue.companyId,
+          issueId: issue.id,
+          previewUrl: product.url,
+          workProductId: product.id,
+          producerAgentId: actor.agentId ?? null,
+        },
+      );
+    }
+
     res.status(201).json(product);
   });
 

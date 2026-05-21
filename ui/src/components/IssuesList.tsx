@@ -75,6 +75,7 @@ import { statusBadge } from "../lib/status-colors";
 import { workflowSort } from "../lib/workflow-sort";
 import { isSuccessfulRunHandoffRequired } from "../lib/successful-run-handoff";
 import { ISSUE_STATUSES, type Issue, type IssueStatus, type Project } from "@paperclipai/shared";
+
 const ISSUE_SEARCH_DEBOUNCE_MS = 250;
 const ISSUE_SEARCH_RESULT_LIMIT = 200;
 const ISSUE_BOARD_COLUMN_RESULT_LIMIT = 200;
@@ -100,6 +101,10 @@ const issueStatusLabels: Record<IssueStatus, string> = {
   todo: "Todo",
   in_progress: "In progress",
   in_review: "In review",
+  qa_pending: "QA pending",
+  qa_in_progress: "QA in progress",
+  qa_failed: "QA failed",
+  qa_passed: "QA passed",
   done: "Done",
   blocked: "Blocked",
   cancelled: "Cancelled",
@@ -109,10 +114,23 @@ const progressSegmentClasses: Record<IssueStatus, string> = {
   todo: "bg-blue-500",
   in_progress: "bg-yellow-500",
   in_review: "bg-violet-500",
+  qa_pending: "bg-sky-500",
+  qa_in_progress: "bg-cyan-500",
+  qa_failed: "bg-rose-500",
+  qa_passed: "bg-emerald-500",
   done: "bg-green-500",
   blocked: "bg-red-500",
   cancelled: "bg-neutral-400",
 };
+
+/* ── Helpers ── */
+
+const statusOrder = ["in_progress", "todo", "backlog", "in_review", "qa_pending", "qa_in_progress", "qa_failed", "qa_passed", "blocked", "done", "cancelled"];
+const priorityOrder = ["critical", "high", "medium", "low"];
+
+function statusLabel(status: string): string {
+  return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 /* ── View state ── */
 
@@ -162,6 +180,13 @@ function normalizeBoardColumnPageSize(value: unknown): BoardColumnPageSize {
     : KANBAN_COLUMN_DEFAULT_PAGE_SIZE;
 }
 
+const quickFilterPresets = [
+  { label: "All", statuses: [] as string[] },
+  { label: "Active", statuses: ["todo", "in_progress", "in_review", "qa_pending", "qa_in_progress", "qa_failed", "blocked"] },
+  { label: "Backlog", statuses: ["backlog"] },
+  { label: "Done", statuses: ["done", "cancelled"] },
+];
+const ISSUE_SEARCH_COMMIT_DELAY_MS = 150;
 function getViewState(key: string): IssueViewState {
   try {
     const raw = localStorage.getItem(key);
