@@ -34,6 +34,7 @@ import {
   instanceSettingsService,
   reconcilePersistedRuntimeServicesOnStartup,
   routineService,
+  prPhaseRunner,
 } from "./services/index.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
@@ -698,6 +699,7 @@ export async function startServer(): Promise<StartedServer> {
   if (config.heartbeatSchedulerEnabled) {
     const heartbeat = heartbeatService(db as any, { pluginWorkerManager });
     const routines = routineService(db as any, { pluginWorkerManager });
+    const prPhases = prPhaseRunner(db as any);
   
     // Reap orphaned running runs at startup while in-memory execution state is empty,
     // then resume any persisted queued runs that were waiting on the previous process.
@@ -763,6 +765,18 @@ export async function startServer(): Promise<StartedServer> {
         })
         .catch((err) => {
           logger.error({ err }, "routine scheduler tick failed");
+        });
+
+      // SYN-30: sweep PR phase work products for stale/blocked attention.
+      void prPhases
+        .tickStalePrPhases({ now: new Date() })
+        .then((result) => {
+          if (result.notified.length > 0) {
+            logger.info({ ...result }, "pr-phase runner raised attention on stale PRs");
+          }
+        })
+        .catch((err) => {
+          logger.error({ err }, "pr-phase runner tick failed");
         });
   
       // Periodically reap orphaned runs (5-min staleness threshold) and make sure
