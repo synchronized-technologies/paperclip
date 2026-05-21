@@ -25,6 +25,9 @@ import {
   createInitialPrPhaseState,
   isPrPhaseTerminal,
   whyNotReadyToMerge,
+  PR_PHASES,
+  PR_PHASE_REVIEW_STATES,
+  PR_PHASE_QA_STATES,
   type PrPhaseEvent,
   type PrPhaseEffect,
   type PrPhaseState,
@@ -70,6 +73,9 @@ function readPrPhaseFromMetadata(metadata: Record<string, unknown> | null | unde
   if (!candidate.phase || !candidate.reviewState || !candidate.qaState || !Array.isArray(candidate.history)) {
     return null;
   }
+  if (!(PR_PHASES as readonly string[]).includes(candidate.phase)) return null;
+  if (!(PR_PHASE_REVIEW_STATES as readonly string[]).includes(candidate.reviewState)) return null;
+  if (!(PR_PHASE_QA_STATES as readonly string[]).includes(candidate.qaState)) return null;
   return {
     version: 1,
     phase: candidate.phase,

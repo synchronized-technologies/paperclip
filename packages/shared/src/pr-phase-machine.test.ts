@@ -61,12 +61,18 @@ describe("PR phase machine — cure cycle", () => {
     expect(state.reviewState).toBe("pending");
   });
 
-  it("raises 'blocked' attention after too many cure cycles", () => {
-    let state = freshState({ phase: "cure", cureCycleCount: 5, lastActivityAt: new Date().toISOString() });
+  it("raises 'blocked' attention when cure cycles exceed max", () => {
+    let state = freshState({ phase: "cure", cureCycleCount: 6, lastActivityAt: new Date().toISOString() });
     const result = applyPrPhaseEvent(state, { kind: "tick", maxCureCycles: 5 });
     expect(result.changed).toBe(true);
     expect(result.state.attention?.reason).toBe("blocked");
     expect(result.effects.some((e) => e.kind === "notify_human")).toBe(true);
+  });
+
+  it("does not raise blocked when cure cycles merely reach max", () => {
+    const state = freshState({ phase: "cure", cureCycleCount: 5, lastActivityAt: new Date().toISOString() });
+    const result = applyPrPhaseEvent(state, { kind: "tick", maxCureCycles: 5 });
+    expect(result.changed).toBe(false);
   });
 });
 
@@ -122,6 +128,85 @@ describe("PR phase machine — staleness tick", () => {
       staleMs: 24 * 60 * 60 * 1000,
     });
     expect(second.changed).toBe(false);
+  });
+});
+
+describe("PR phase machine — qa_proof_added phase gating", () => {
+  it("accepts proof in qa phase", () => {
+    const state = freshState({ phase: "qa", reviewState: "approved" });
+    const result = applyPrPhaseEvent(state, { kind: "qa_proof_added", proof });
+    expect(result.changed).toBe(true);
+    expect(result.state.proofs).toHaveLength(1);
+  });
+
+  it("accepts proof in review phase", () => {
+    const state = freshState({ phase: "review", reviewState: "in_progress" });
+    const result = applyPrPhaseEvent(state, { kind: "qa_proof_added", proof });
+    expect(result.changed).toBe(true);
+    expect(result.state.proofs).toHaveLength(1);
+  });
+
+  it("rejects proof in implementation phase", () => {
+    const state = freshState({ phase: "implementation" });
+    const result = applyPrPhaseEvent(state, { kind: "qa_proof_added", proof });
+    expect(result.changed).toBe(false);
+    expect(result.error).toMatch(/review or qa/);
+  });
+
+  it("rejects proof in cure phase", () => {
+    const state = freshState({ phase: "cure" });
+    const result = applyPrPhaseEvent(state, { kind: "qa_proof_added", proof });
+    expect(result.changed).toBe(false);
+    expect(result.error).toMatch(/review or qa/);
+  });
+
+  it("rejects proof in ready_to_merge phase", () => {
+    const state = freshState({ phase: "ready_to_merge", reviewState: "approved", qaState: "approved", proofs: [proof] });
+    const result = applyPrPhaseEvent(state, { kind: "qa_proof_added", proof });
+    expect(result.changed).toBe(false);
+    expect(result.error).toMatch(/review or qa/);
+  });
+});
+
+describe("PR phase machine — whyNotReadyToMerge invariant validation", () => {
+  it("catches corrupted ready_to_merge state missing review approval", () => {
+    const state = freshState({
+      phase: "ready_to_merge",
+      reviewState: "pending",
+      qaState: "approved",
+      proofs: [proof],
+    });
+    expect(whyNotReadyToMerge(state)).toMatch(/review/);
+  });
+
+  it("catches corrupted merged state missing QA approval", () => {
+    const state = freshState({
+      phase: "merged",
+      reviewState: "approved",
+      qaState: "pending",
+      proofs: [proof],
+    });
+    expect(whyNotReadyToMerge(state)).toMatch(/QA/);
+  });
+
+  it("catches corrupted ready_to_merge state missing proofs", () => {
+    const state = freshState({
+      phase: "ready_to_merge",
+      reviewState: "approved",
+      qaState: "approved",
+      proofs: [],
+    });
+    expect(whyNotReadyToMerge(state)).toMatch(/proof/);
+  });
+
+  it("returns null for valid ready_to_merge state", () => {
+    const state = freshState({
+      phase: "ready_to_merge",
+      reviewState: "approved",
+      qaState: "approved",
+      proofs: [proof],
+    });
+    expect(whyNotReadyToMerge(state)).toBeNull();
   });
 });
 

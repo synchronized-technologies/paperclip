@@ -10,7 +10,7 @@ Code: `packages/shared/src/pr-phase-machine.ts`, `server/src/services/pr-phase-r
 
 Move an implementation pull request through its lifecycle automatically and durably:
 
-```
+```text
 implementation -> review -> (cure -> review)* -> qa -> ready_to_merge -> merged
 ```
 

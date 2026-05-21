@@ -152,7 +152,9 @@ export function applyPrPhaseEvent(
       break;
     }
     case "qa_proof_added": {
-      // proofs are accepted in qa or review (e.g. preview URL during review)
+      if (next.phase !== "qa" && next.phase !== "review") {
+        return noChange(current, "qa_proof_added only accepted in review or qa phase");
+      }
       next.proofs.push(event.proof);
       break;
     }
@@ -223,7 +225,7 @@ export function applyPrPhaseEvent(
       // Already attention-raised and not acknowledged: idempotent, no new effects.
       const hasOpenAttention = next.attention && !next.attention.acknowledgedAt;
 
-      if (next.cureCycleCount >= maxCure) {
+      if (next.cureCycleCount > maxCure) {
         if (!hasOpenAttention || next.attention?.reason !== "blocked") {
           const attention: PrPhaseAttention = {
             reason: "blocked",
@@ -268,9 +270,11 @@ export function applyPrPhaseEvent(
  * `approved`/ready-to-merge. Returns `null` if it is safe, otherwise a human-readable reason.
  */
 export function whyNotReadyToMerge(state: PrPhaseState): string | null {
-  if (state.phase === "ready_to_merge" || state.phase === "merged") return null;
   if (state.reviewState !== "approved") return "review has not been approved";
   if (state.qaState !== "approved") return "QA has not been approved";
   if (state.proofs.length === 0) return "no proof artifacts recorded";
-  return `phase is ${state.phase}, not ready_to_merge`;
+  if (state.phase !== "ready_to_merge" && state.phase !== "merged") {
+    return `phase is ${state.phase}, not ready_to_merge`;
+  }
+  return null;
 }

@@ -92,6 +92,58 @@ describe("prPhaseRunner", () => {
     expect(storedWp.reviewState).toBe("approved");
   });
 
+  it("falls back to initial state when persisted metadata has invalid enum values", async () => {
+    storedWp.metadata = {
+      prPhase: {
+        version: 1,
+        phase: "bogus_phase",
+        reviewState: "approved",
+        qaState: "approved",
+        expectedAgentId: null,
+        lastActivityAt: new Date().toISOString(),
+        cureCycleCount: 0,
+        proofs: [],
+        reviewNotes: null,
+        qaNotes: null,
+        attention: null,
+        history: [],
+      },
+    };
+    const fakeDb = {
+      select: () => ({ from: () => ({ where: async () => [] }) }),
+    } as any;
+    const runner = prPhaseRunner(fakeDb);
+    const loaded = await runner.getState("wp-1");
+    expect(loaded).not.toBeNull();
+    expect(loaded!.state.phase).toBe("implementation");
+  });
+
+  it("falls back to initial state when persisted reviewState is invalid", async () => {
+    storedWp.metadata = {
+      prPhase: {
+        version: 1,
+        phase: "review",
+        reviewState: "invalid_review_state",
+        qaState: "pending",
+        expectedAgentId: null,
+        lastActivityAt: new Date().toISOString(),
+        cureCycleCount: 0,
+        proofs: [],
+        reviewNotes: null,
+        qaNotes: null,
+        attention: null,
+        history: [],
+      },
+    };
+    const fakeDb = {
+      select: () => ({ from: () => ({ where: async () => [] }) }),
+    } as any;
+    const runner = prPhaseRunner(fakeDb);
+    const loaded = await runner.getState("wp-1");
+    expect(loaded).not.toBeNull();
+    expect(loaded!.state.phase).toBe("implementation");
+  });
+
   it("rejects unknown PR ids", async () => {
     const fakeDb = { select: () => ({ from: () => ({ where: async () => [] }) }) } as any;
     const runner = prPhaseRunner(fakeDb);

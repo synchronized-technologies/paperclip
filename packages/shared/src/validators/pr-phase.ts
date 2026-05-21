@@ -5,7 +5,7 @@ export const prPhaseProofSchema = z.object({
   kind: z.enum(PR_PHASE_PROOF_KINDS),
   url: z.string().url().optional().nullable(),
   summary: z.string().max(2000).optional().nullable(),
-  recordedAt: z.string().datetime().optional(),
+  recordedAt: z.string().datetime().default(() => new Date().toISOString()),
   recordedBy: z.string().optional().nullable(),
 });
 

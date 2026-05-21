@@ -23,7 +23,16 @@ import {
 } from "../services/index.js";
 import type { PrPhaseActor } from "../services/pr-phase-runner.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
+import { forbidden } from "../errors.js";
 import { issueService } from "../services/issues.js";
+
+const PRIVILEGED_PR_PHASE_EVENTS: ReadonlySet<string> = new Set([
+  "review_approved",
+  "review_changes_requested",
+  "qa_approved",
+  "qa_rejected",
+  "marked_merged",
+]);
 
 function actorFromReq(req: Request): PrPhaseActor {
   const info = getActorInfo(req);
@@ -92,6 +101,11 @@ export function prPhaseRoutes(db: Db) {
         return;
       }
       assertCompanyAccess(req, wp.companyId);
+      if (PRIVILEGED_PR_PHASE_EVENTS.has(req.body.kind)) {
+        if (req.actor.type !== "board") {
+          throw forbidden("Only board users may submit privileged PR phase events");
+        }
+      }
       const result = await runner.apply(wp.id, req.body, actorFromReq(req));
       if (!result.changed && result.error) {
         res.status(409).json(result);
