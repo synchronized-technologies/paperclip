@@ -3412,6 +3412,9 @@ export function issueRoutes(
     if (!(await assertCheapRecoveryIssueAssigneeProfileAllowed(req, res, existing, req.body))) return;
 
     const actor = getActorInfo(req);
+    const persistedActorRunId = req.actor.type === "agent"
+      ? await existingHeartbeatRunIdForCompany(actor.runId, existing.companyId)
+      : actor.runId;
     const isClosed = isClosedIssueStatus(existing.status);
     const isBlocked = existing.status === "blocked";
     const normalizedAssigneeAgentId = await normalizeIssueAssigneeAgentReference(
@@ -3683,7 +3686,7 @@ export function issueRoutes(
             actorUserId: actor.actorType === "user" ? actor.actorId : null,
             outcome: decision.outcome,
             body: decision.body,
-            createdByRunId: actor.runId ?? null,
+            createdByRunId: persistedActorRunId ?? null,
           });
 
           return updated;
@@ -4059,7 +4062,7 @@ export function issueRoutes(
       comment = await svc.addComment(id, commentBody, {
         agentId: actor.agentId ?? undefined,
         userId: actor.actorType === "user" ? actor.actorId : undefined,
-        runId: actor.runId,
+        runId: persistedActorRunId,
       });
       await issueReferencesSvc.syncComment(comment.id);
       const commentReferenceSummaryAfter = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
