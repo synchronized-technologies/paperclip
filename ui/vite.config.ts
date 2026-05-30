@@ -24,6 +24,7 @@ export default defineConfig(({ mode }) => ({
   },
   server: {
     port: 5173,
+    allowedHosts: ["tda-gaming-wsl.tail450b4e.ts.net"],
     watch: createUiDevWatchOptions(process.cwd()),
     proxy: {
       "/api": {

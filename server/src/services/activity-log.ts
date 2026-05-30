@@ -70,10 +70,25 @@ function normalizeActivityRunId(runId: string | null | undefined): string | null
 }
 
 function isActivityRunForeignKeyError(error: unknown): boolean {
-  const err = error as { code?: unknown; constraint?: unknown; detail?: unknown; message?: unknown } | null;
-  if (!err || err.code !== "23503") return false;
-  const haystack = `${String(err.constraint ?? "")}\n${String(err.detail ?? "")}\n${String(err.message ?? "")}`;
-  return haystack.includes("activity_log_run_id") || haystack.includes("activity_log") && haystack.includes("run_id");
+  let current = error as {
+    code?: unknown;
+    constraint?: unknown;
+    detail?: unknown;
+    message?: unknown;
+    cause?: unknown;
+  } | null;
+  while (current) {
+    const haystack = `${String(current.constraint ?? "")}\n${String(current.detail ?? "")}\n${String(current.message ?? "")}`;
+    if (
+      (current.code === "23503" || haystack.includes("violates foreign key constraint"))
+      && (haystack.includes("activity_log_run_id")
+        || (haystack.includes("activity_log") && haystack.includes("run_id")))
+    ) {
+      return true;
+    }
+    current = current.cause as typeof current;
+  }
+  return false;
 }
 
 export async function logActivity(db: Db, input: LogActivityInput) {

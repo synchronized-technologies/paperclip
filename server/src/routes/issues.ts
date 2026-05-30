@@ -110,6 +110,7 @@ import {
 } from "../services/issue-execution-policy.js";
 import { parseIssueExecutionWorkspaceSettings } from "../services/execution-workspace-policy.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
+import { triggerQaForPreviewUrl } from "../services/qa-preview-orchestration.js";
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
 const updateIssueRouteSchema = updateIssueSchema.extend({
@@ -2858,6 +2859,21 @@ export function issueRoutes(
       actor,
       workProductChanged: true,
     });
+
+    // When a preview URL work product is created, wake QA agents automatically.
+    if (product.type === "preview_url" && product.url) {
+      void triggerQaForPreviewUrl(
+        { listAgents: (cid) => agentsSvc.list(cid), wakeup: (aid, opts) => heartbeat.wakeup(aid, opts) },
+        {
+          companyId: issue.companyId,
+          issueId: issue.id,
+          previewUrl: product.url,
+          workProductId: product.id,
+          producerAgentId: actor.agentId ?? null,
+        },
+      );
+    }
+
     res.status(201).json(product);
   });
 
@@ -3396,6 +3412,9 @@ export function issueRoutes(
     if (!(await assertCheapRecoveryIssueAssigneeProfileAllowed(req, res, existing, req.body))) return;
 
     const actor = getActorInfo(req);
+    const persistedActorRunId = req.actor.type === "agent"
+      ? await existingHeartbeatRunIdForCompany(actor.runId, existing.companyId)
+      : actor.runId;
     const isClosed = isClosedIssueStatus(existing.status);
     const isBlocked = existing.status === "blocked";
     const normalizedAssigneeAgentId = await normalizeIssueAssigneeAgentReference(
@@ -3667,7 +3686,7 @@ export function issueRoutes(
             actorUserId: actor.actorType === "user" ? actor.actorId : null,
             outcome: decision.outcome,
             body: decision.body,
-            createdByRunId: actor.runId ?? null,
+            createdByRunId: persistedActorRunId ?? null,
           });
 
           return updated;
@@ -4043,7 +4062,7 @@ export function issueRoutes(
       comment = await svc.addComment(id, commentBody, {
         agentId: actor.agentId ?? undefined,
         userId: actor.actorType === "user" ? actor.actorId : undefined,
-        runId: actor.runId,
+        runId: persistedActorRunId,
       });
       await issueReferencesSvc.syncComment(comment.id);
       const commentReferenceSummaryAfter = await issueReferencesSvc.listIssueReferenceSummary(issue.id);

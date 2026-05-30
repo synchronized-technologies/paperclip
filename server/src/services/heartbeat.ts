@@ -112,9 +112,18 @@ import {
   getIssueContinuationSummaryDocument,
   refreshIssueContinuationSummary,
 } from "./issue-continuation-summary.js";
+import { triggerQaForPreviewUrl } from "./qa-preview-orchestration.js";
 import { executionWorkspaceService, mergeExecutionWorkspaceConfig } from "./execution-workspaces.js";
 import { workspaceOperationService } from "./workspace-operations.js";
 import { isProcessGroupAlive, terminateLocalService } from "./local-service-supervisor.js";
+import {
+  ACTIVE_TIMER_FOLLOWUP_ISSUE_STATUSES,
+  deriveEffectiveIssueTimerFollowupState,
+  IDLE_TIMER_FOLLOWUP_CAP,
+  isActiveTimerFollowupIssueStatus,
+  LIFETIME_TIMER_FOLLOWUP_CAP,
+  type IssueTimerFollowupState,
+} from "./issue-timer-followups.js";
 import {
   buildExecutionWorkspaceAdapterConfig,
   gateProjectExecutionWorkspacePolicy,
@@ -1025,6 +1034,7 @@ interface WakeupOptions {
   requestedByActorType?: "user" | "agent" | "system";
   requestedByActorId?: string | null;
   contextSnapshot?: Record<string, unknown>;
+  startQueuedRun?: boolean;
 }
 
 type UsageTotals = {
@@ -5894,6 +5904,37 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     return Number(count ?? 0);
   }
 
+  async function listActiveTimerFollowupIssuesForAgent(agent: typeof agents.$inferSelect) {
+    return await db
+      .select({
+        id: issues.id,
+        status: issues.status,
+        updatedAt: issues.updatedAt,
+        createdAt: issues.createdAt,
+        timerFollowupState: issues.timerFollowupState,
+      })
+      .from(issues)
+      .where(
+        and(
+          eq(issues.companyId, agent.companyId),
+          eq(issues.assigneeAgentId, agent.id),
+          isNull(issues.hiddenAt),
+          inArray(issues.status, [...ACTIVE_TIMER_FOLLOWUP_ISSUE_STATUSES]),
+        ),
+      )
+      .orderBy(
+        sql`case
+          when ${issues.status} = 'in_progress' then 0
+          when ${issues.status} = 'todo' then 1
+          when ${issues.status} = 'in_review' then 2
+          when ${issues.status} = 'blocked' then 3
+          else 4
+        end`,
+        asc(issues.updatedAt),
+        asc(issues.createdAt),
+      );
+  }
+
   async function claimQueuedRun(run: typeof heartbeatRuns.$inferSelect) {
     if (run.status !== "queued") return run;
     const agent = await getAgent(run.agentId);
@@ -7852,6 +7893,29 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               `[paperclip] Failed to post adapter-managed runtime comment: ${err instanceof Error ? err.message : String(err)}\n`,
             );
           }
+
+          // When adapter returns preview runtime services, trigger QA agents.
+          const previewService = adapterManagedRuntimeServices.find(
+            (svc) => svc.serviceName.startsWith("preview") && svc.url,
+          );
+          if (previewService?.url) {
+            void triggerQaForPreviewUrl(
+              {
+                listAgents: async (companyId) => {
+                  const rows = await db.select().from(agents).where(eq(agents.companyId, companyId));
+                  return rows.map((r) => ({ id: r.id, role: r.role, status: r.status }));
+                },
+                wakeup: enqueueWakeup,
+              },
+              {
+                companyId: agent.companyId,
+                issueId,
+                previewUrl: previewService.url,
+                runtimeServiceName: previewService.serviceName,
+                producerAgentId: agent.id,
+              },
+            );
+          }
         }
       }
       const nextSessionState = resolveNextSessionState({
@@ -8663,6 +8727,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
   async function enqueueWakeup(agentId: string, opts: WakeupOptions = {}) {
     const source = opts.source ?? "on_demand";
     const triggerDetail = opts.triggerDetail ?? null;
+    const startQueuedRun = opts.startQueuedRun ?? true;
     const contextSnapshot: Record<string, unknown> = { ...(opts.contextSnapshot ?? {}) };
     const reason = opts.reason ?? null;
     const payload = opts.payload ?? null;
@@ -8850,6 +8915,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             companyId: issues.companyId,
             status: issues.status,
             assigneeAgentId: issues.assigneeAgentId,
+            hiddenAt: issues.hiddenAt,
+            updatedAt: issues.updatedAt,
+            timerFollowupState: issues.timerFollowupState,
             executionRunId: issues.executionRunId,
             executionAgentNameKey: issues.executionAgentNameKey,
           })
@@ -8956,6 +9024,74 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           return true;
         };
 
+        let nextTimerFollowupState: IssueTimerFollowupState | null = null;
+        const issueInternalUpdatedAt = source === "timer" ? issue.updatedAt ?? new Date() : new Date();
+        if (source === "timer") {
+          if (
+            issue.hiddenAt ||
+            issue.assigneeAgentId !== agentId ||
+            !isActiveTimerFollowupIssueStatus(issue.status)
+          ) {
+            await tx.insert(agentWakeupRequests).values({
+              companyId: agent.companyId,
+              agentId,
+              source,
+              triggerDetail,
+              reason: "timer_followup.no_active_assigned_issue",
+              payload,
+              status: "skipped",
+              requestedByActorType: opts.requestedByActorType ?? null,
+              requestedByActorId: opts.requestedByActorId ?? null,
+              idempotencyKey: opts.idempotencyKey ?? null,
+              finishedAt: new Date(),
+            });
+            return { kind: "skipped" as const };
+          }
+
+          const followupState = deriveEffectiveIssueTimerFollowupState({
+            timerFollowupState: issue.timerFollowupState,
+            updatedAt: issue.updatedAt,
+          });
+          if (followupState.lifetimeFollowupCount >= LIFETIME_TIMER_FOLLOWUP_CAP) {
+            await tx.insert(agentWakeupRequests).values({
+              companyId: agent.companyId,
+              agentId,
+              source,
+              triggerDetail,
+              reason: "timer_followup.lifetime_cap_reached",
+              payload,
+              status: "skipped",
+              requestedByActorType: opts.requestedByActorType ?? null,
+              requestedByActorId: opts.requestedByActorId ?? null,
+              idempotencyKey: opts.idempotencyKey ?? null,
+              finishedAt: new Date(),
+            });
+            return { kind: "skipped" as const };
+          }
+          if (followupState.idleFollowupCount >= IDLE_TIMER_FOLLOWUP_CAP) {
+            await tx.insert(agentWakeupRequests).values({
+              companyId: agent.companyId,
+              agentId,
+              source,
+              triggerDetail,
+              reason: "timer_followup.idle_cap_reached",
+              payload,
+              status: "skipped",
+              requestedByActorType: opts.requestedByActorType ?? null,
+              requestedByActorId: opts.requestedByActorId ?? null,
+              idempotencyKey: opts.idempotencyKey ?? null,
+              finishedAt: new Date(),
+            });
+            return { kind: "skipped" as const };
+          }
+
+          nextTimerFollowupState = {
+            idleFollowupCount: followupState.idleFollowupCount + 1,
+            lifetimeFollowupCount: followupState.lifetimeFollowupCount + 1,
+            lastTimerFollowupAt: new Date().toISOString(),
+          };
+        }
+
         let activeExecutionRun = issue.executionRunId
           ? await tx
             .select()
@@ -8984,7 +9120,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               executionRunId: null,
               executionAgentNameKey: null,
               executionLockedAt: null,
-              updatedAt: new Date(),
+              updatedAt: issueInternalUpdatedAt,
             })
             .where(eq(issues.id, issue.id));
         }
@@ -9023,7 +9159,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                   executionRunId: legacyRun.id,
                   executionAgentNameKey: normalizeAgentNameKey(legacyAgent?.name),
                   executionLockedAt: new Date(),
-                  updatedAt: new Date(),
+                  updatedAt: issueInternalUpdatedAt,
                 })
                 .where(eq(issues.id, issue.id));
             }
@@ -9107,6 +9243,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               .where(eq(heartbeatRuns.id, activeExecutionRun.id))
               .returning()
               .then((rows) => rows[0] ?? activeExecutionRun);
+            if (nextTimerFollowupState) {
+              await tx
+                .update(issues)
+                .set({ timerFollowupState: nextTimerFollowupState })
+                .where(eq(issues.id, issue.id));
+            }
 
             await tx.insert(agentWakeupRequests).values({
               companyId: agent.companyId,
@@ -9170,6 +9312,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
                 updatedAt: new Date(),
               })
               .where(eq(agentWakeupRequests.id, existingDeferred.id));
+            if (nextTimerFollowupState) {
+              await tx
+                .update(issues)
+                .set({ timerFollowupState: nextTimerFollowupState })
+                .where(eq(issues.id, issue.id));
+            }
 
             return { kind: "deferred" as const };
           }
@@ -9186,6 +9334,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             requestedByActorId: opts.requestedByActorId ?? null,
             idempotencyKey: opts.idempotencyKey ?? null,
           });
+          if (nextTimerFollowupState) {
+            await tx
+              .update(issues)
+              .set({ timerFollowupState: nextTimerFollowupState })
+              .where(eq(issues.id, issue.id));
+          }
 
           return { kind: "deferred" as const };
         }
@@ -9231,6 +9385,16 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           })
           .where(eq(agentWakeupRequests.id, wakeupRequest.id));
 
+        if (nextTimerFollowupState) {
+          await tx
+            .update(issues)
+            .set({
+              timerFollowupState: nextTimerFollowupState,
+              updatedAt: issueInternalUpdatedAt,
+            })
+            .where(eq(issues.id, issue.id));
+        }
+
         // executionRunId is NOT stamped here (enqueueWakeup queues the run but
         // doesn't start it). It will be stamped in claimQueuedRun() once the run
         // transitions to "running" — Fix A (lazy locking).
@@ -9257,8 +9421,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         },
       });
 
-      await startNextQueuedRunForAgent(agent.id);
+      if (startQueuedRun) {
+        await startNextQueuedRunForAgent(agent.id);
+      }
       return newRun;
+    }
+
+    if (source === "timer") {
+      await writeSkippedRequest("timer_followup.no_active_assigned_issue");
+      return null;
     }
 
     const activeRuns = await db
@@ -9372,7 +9543,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       },
     });
 
-    await startNextQueuedRunForAgent(agent.id);
+    if (startQueuedRun) {
+      await startNextQueuedRunForAgent(agent.id);
+    }
 
     return newRun;
   }
@@ -9871,11 +10044,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
 
     buildRunOutputSilence,
 
-    tickTimers: async (now = new Date()) => {
+    tickTimers: async (now = new Date(), opts: { startQueuedRuns?: boolean } = {}) => {
       const allAgents = await db.select().from(agents);
       let checked = 0;
       let enqueued = 0;
       let skipped = 0;
+      const startQueuedRuns = opts.startQueuedRuns ?? true;
 
       for (const agent of allAgents) {
         if (agent.status === "paused" || agent.status === "terminated" || agent.status === "pending_approval") continue;
@@ -9883,24 +10057,49 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         if (!policy.enabled || policy.intervalSec <= 0) continue;
 
         checked += 1;
-        const baseline = new Date(agent.lastHeartbeatAt ?? agent.createdAt).getTime();
-        const elapsedMs = now.getTime() - baseline;
-        if (elapsedMs < policy.intervalSec * 1000) continue;
+        const activeIssues = await listActiveTimerFollowupIssuesForAgent(agent);
+        let attempted = false;
+        let enqueuedForAgent = false;
 
-        const run = await enqueueWakeup(agent.id, {
-          source: "timer",
-          triggerDetail: "system",
-          reason: "heartbeat_timer",
-          requestedByActorType: "system",
-          requestedByActorId: "heartbeat_scheduler",
-          contextSnapshot: {
-            source: "scheduler",
-            reason: "interval_elapsed",
-            now: now.toISOString(),
-          },
-        });
-        if (run) enqueued += 1;
-        else skipped += 1;
+        for (const issue of activeIssues) {
+          const followupState = deriveEffectiveIssueTimerFollowupState({
+            timerFollowupState: issue.timerFollowupState,
+            updatedAt: issue.updatedAt,
+          });
+          if (followupState.lifetimeFollowupCount >= LIFETIME_TIMER_FOLLOWUP_CAP) continue;
+          if (followupState.idleFollowupCount >= IDLE_TIMER_FOLLOWUP_CAP) continue;
+
+          const baseline = Math.max(
+            new Date(agent.lastHeartbeatAt ?? agent.createdAt).getTime(),
+            followupState.lastTimerFollowupAt ? new Date(followupState.lastTimerFollowupAt).getTime() : 0,
+          );
+          const elapsedMs = now.getTime() - baseline;
+          if (elapsedMs < policy.intervalSec * 1000) continue;
+
+          attempted = true;
+          const run = await enqueueWakeup(agent.id, {
+            source: "timer",
+            triggerDetail: "system",
+            reason: "heartbeat_timer",
+            payload: { issueId: issue.id },
+            requestedByActorType: "system",
+            requestedByActorId: "heartbeat_scheduler",
+            contextSnapshot: {
+              issueId: issue.id,
+              source: "scheduler",
+              reason: "interval_elapsed",
+              now: now.toISOString(),
+            },
+            startQueuedRun: startQueuedRuns,
+          });
+          if (run) {
+            enqueued += 1;
+            enqueuedForAgent = true;
+            break;
+          }
+        }
+
+        if (attempted && !enqueuedForAgent) skipped += 1;
       }
 
       const issueMonitors = await tickDueIssueMonitors(now);
