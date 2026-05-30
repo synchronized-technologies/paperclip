@@ -19,6 +19,46 @@ function makeCtx(overrides?: Partial<PreviewUrlContext>): PreviewUrlContext {
 }
 
 describe("triggerQaForPreviewUrl", () => {
+  it("prefers the reusable OpenClaw generic-qa agent when configured", async () => {
+    const wakeup = vi.fn(async () => undefined);
+    const deps = makeDeps({
+      listAgents: vi.fn(async () => [
+        { id: "qa-legacy", role: "qa", status: "idle" },
+        {
+          id: "openclaw-generic-qa",
+          name: "Generic QA",
+          role: "general",
+          status: "idle",
+          adapterType: "openclaw_gateway",
+          adapterConfig: { agentId: "generic-qa" },
+        },
+      ]),
+      wakeup,
+    });
+
+    const result = await triggerQaForPreviewUrl(deps, makeCtx({
+      prWorkProductId: "pr-wp-62",
+      pullRequestUrl: "https://github.com/synchronized-technologies/synctech-platform/pull/62",
+      qaAuthHandoff: {
+        method: "email_magic_link",
+        email: "darie@synctech.dev",
+      },
+    }));
+
+    expect(result).toEqual(["openclaw-generic-qa"]);
+    expect(wakeup).toHaveBeenCalledTimes(1);
+    expect(wakeup).toHaveBeenCalledWith("openclaw-generic-qa", expect.objectContaining({
+      payload: expect.objectContaining({
+        prWorkProductId: "pr-wp-62",
+        pullRequestUrl: "https://github.com/synchronized-technologies/synctech-platform/pull/62",
+        qaAuthHandoff: expect.objectContaining({
+          method: "email_magic_link",
+          email: "darie@synctech.dev",
+        }),
+      }),
+    }));
+  });
+
   it("wakes a QA agent when one exists", async () => {
     const wakeup = vi.fn(async () => undefined);
     const deps = makeDeps({

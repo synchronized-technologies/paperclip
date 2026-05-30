@@ -7903,7 +7903,14 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
               {
                 listAgents: async (companyId) => {
                   const rows = await db.select().from(agents).where(eq(agents.companyId, companyId));
-                  return rows.map((r) => ({ id: r.id, role: r.role, status: r.status }));
+                  return rows.map((r) => ({
+                    id: r.id,
+                    name: r.name,
+                    role: r.role,
+                    status: r.status,
+                    adapterType: r.adapterType,
+                    adapterConfig: r.adapterConfig,
+                  }));
                 },
                 wakeup: enqueueWakeup,
               },
