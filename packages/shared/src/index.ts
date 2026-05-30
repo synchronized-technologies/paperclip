@@ -1136,3 +1136,36 @@ export type {
   EnvironmentProviderCapability,
   EnvironmentSupportStatus,
 } from "./environment-support.js";
+
+// PR phase progression (SYN-30)
+export {
+  PR_PHASES,
+  PR_PHASE_REVIEW_STATES,
+  PR_PHASE_QA_STATES,
+  PR_PHASE_PROOF_KINDS,
+  PR_PHASE_TERMINAL,
+  DEFAULT_PR_PHASE_STALE_MS,
+  DEFAULT_PR_PHASE_MAX_CURE_CYCLES,
+  createInitialPrPhaseState,
+  isPrPhaseTerminal,
+  type PrPhase,
+  type PrPhaseReviewState,
+  type PrPhaseQaState,
+  type PrPhaseProof,
+  type PrPhaseProofKind,
+  type PrPhaseAttention,
+  type PrPhaseHistoryEntry,
+  type PrPhaseState,
+} from "./types/pr-phase.js";
+export {
+  applyPrPhaseEvent,
+  whyNotReadyToMerge,
+  type PrPhaseEvent,
+  type PrPhaseEffect,
+  type PrPhaseTransitionResult,
+} from "./pr-phase-machine.js";
+export {
+  prPhaseEventSchema,
+  prPhaseProofSchema,
+  type PrPhaseEventInput,
+} from "./validators/pr-phase.js";
