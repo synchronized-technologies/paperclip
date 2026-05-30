@@ -18,9 +18,12 @@ import type { Db } from "@paperclipai/db";
 import { prPhaseEventSchema } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import {
+  agentService,
+  heartbeatService,
   prPhaseRunner,
   workProductService,
 } from "../services/index.js";
+import { triggerQaForPreviewUrl } from "../services/qa-preview-orchestration.js";
 import type { PrPhaseActor } from "../services/pr-phase-runner.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { forbidden } from "../errors.js";
@@ -33,6 +36,11 @@ const PRIVILEGED_PR_PHASE_EVENTS: ReadonlySet<string> = new Set([
   "qa_rejected",
   "marked_merged",
 ]);
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
 
 function actorFromReq(req: Request): PrPhaseActor {
   const info = getActorInfo(req);
@@ -50,6 +58,8 @@ export function prPhaseRoutes(db: Db) {
   const wpSvc = workProductService(db);
   const runner = prPhaseRunner(db);
   const issues = issueService(db);
+  const agentsSvc = agentService(db);
+  const heartbeat = heartbeatService(db);
 
   async function loadWp(id: string) {
     const wp = await wpSvc.getById(id);
@@ -110,6 +120,26 @@ export function prPhaseRoutes(db: Db) {
       if (!result.changed && result.error) {
         res.status(409).json(result);
         return;
+      }
+      if (result.changed && result.effects.some((effect) => effect.kind === "request_agent_action" && effect.phase === "qa")) {
+        const products = await wpSvc.listForIssue(wp.issueId);
+        const preview = products.find((product) => product.type === "preview_url" && product.url);
+        if (preview?.url) {
+          const previewMetadata = readRecord(preview.metadata);
+          void triggerQaForPreviewUrl(
+            { listAgents: (cid) => agentsSvc.list(cid), wakeup: (aid, opts) => heartbeat.wakeup(aid, opts) },
+            {
+              companyId: wp.companyId,
+              issueId: wp.issueId,
+              previewUrl: preview.url,
+              workProductId: preview.id,
+              prWorkProductId: wp.id,
+              pullRequestUrl: wp.url,
+              qaAuthHandoff: readRecord(previewMetadata?.qaAuthHandoff),
+              producerAgentId: actorFromReq(req).agentId ?? null,
+            },
+          );
+        }
       }
       res.json(result);
     },

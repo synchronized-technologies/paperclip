@@ -120,11 +120,57 @@ inbox aggregator, board notifications) consume `attention` and activity log
 rows. This matches the SYN-30 requirement: **only notify T-da on permission,
 blocked/stale, or merge_ready**.
 
+## Generic QA handoff pilot
+
+When a board user submits `review_approved` and the transition emits
+`request_agent_action: qa`, the PR phase route now checks the issue for an
+existing `preview_url` work product. If found, Paperclip wakes QA via the same
+preview orchestration path used by runtime-service previews.
+
+QA agent selection prefers the reusable OpenClaw gateway agent whose adapter
+config contains:
+
+```json
+{
+  "adapterType": "openclaw_gateway",
+  "adapterConfig": { "agentId": "generic-qa" }
+}
+```
+
+If that agent is not present, Paperclip falls back to existing company agents
+with a QA/quality role. This lets companies adopt OpenClaw's reusable
+`generic-qa` agent without breaking older QA-agent setups.
+
+Pilot fixture: SyncTech Platform PR #62.
+
+- PR work product URL: `https://github.com/synchronized-technologies/synctech-platform/pull/62`
+- Preview URL work product: `https://synctech-platform-admin--pr-62-a85n35zs.web.app`
+- Expected PR-phase path:
+  1. Ensure/create a `pull_request` work product for PR #62.
+  2. Ensure/create a `preview_url` work product on the same issue with the admin preview URL.
+  3. Ensure the company has an OpenClaw gateway Paperclip agent configured with `adapterConfig.agentId = "generic-qa"`.
+  4. Submit `POST /api/work-products/:prWorkProductId/pr-phase/events` with `{ "kind": "review_approved" }` as a board user.
+  5. Paperclip wakes the generic QA agent with `reason: "preview_url_ready"` and payload containing the preview URL, PR work product ID, and pull-request URL.
+  6. QA must still record proof (`qa_proof_added`) and approval (`qa_approved`); Paperclip will not advance to ready-to-merge without proof.
+
+PR #62's current known QA status is PARTIAL/BLOCKED by auth for unattended
+automation, but admin preview auth is not a hard blocker for the pilot. T-da
+approved using the normal SyncTech email sign-in/magic-link flow with Darie's
+SyncTech email (`darie@synctech.dev`; treat `.tv` transcript mentions as likely
+transcription errors unless the app requires otherwise). The QA agent/human
+handoff should request only the app-generated auth link/code, then continue once
+mailbox access or parent coordination supplies the link/code. Do not send any
+external emails beyond the app-generated sign-in flow.
+
+The pilot therefore proves Paperclip can hand the case to `generic-qa` and
+preserve QA proof gates; it does not claim PR #62 is merge-ready until generic
+QA records proof and approval.
+
 ## What the runner intentionally does NOT do (v1)
 
-- It does not spawn agent runs. The existing assignment / wakeup machinery
-  remains the right surface for that; the runner publishes
-  `request_agent_action` effects that callers (or future hooks) can pick up.
+- It does not make the runner itself own long-running agent execution. The route
+  layer consumes `request_agent_action` effects and uses the existing wakeup
+  machinery for QA handoff.
 - It does not pull PR status from GitHub. The PR work product is updated by
   the coding agent / CI hook as today.
 - It does not screenshot or test the deployed preview itself; QA proof must
@@ -138,6 +184,10 @@ blocked/stale, or merge_ready**.
 - `server/src/__tests__/pr-phase-runner.test.ts` — end-to-end exercise of the
   runner via mocked work-product service: walks implementation through to
   ready_to_merge, confirms the proof guard fires.
+- `server/src/__tests__/qa-preview-orchestration.test.ts` — verifies generic
+  OpenClaw `generic-qa` selection is preferred over legacy QA-role agents.
+- `server/src/__tests__/pr-phase-routes-authz.test.ts` — verifies the route wakes
+  generic QA when review approval moves a PR into QA and a preview URL exists.
 
 ## Operational notes
 

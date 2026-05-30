@@ -58,8 +58,24 @@ const mockGetState = vi.fn(async (id: string) =>
 );
 
 const mockWhyNotReady = vi.fn(() => null);
+const mockWakeup = vi.fn(async () => undefined);
 
 vi.mock("../services/index.js", () => ({
+  agentService: () => ({
+    list: vi.fn(async () => [
+      {
+        id: "paperclip-generic-qa",
+        name: "Generic QA",
+        role: "general",
+        status: "idle",
+        adapterType: "openclaw_gateway",
+        adapterConfig: { agentId: "generic-qa" },
+      },
+    ]),
+  }),
+  heartbeatService: () => ({
+    wakeup: mockWakeup,
+  }),
   prPhaseRunner: () => ({
     apply: mockApply,
     ensureInitialized: vi.fn(),
@@ -68,6 +84,36 @@ vi.mock("../services/index.js", () => ({
     whyNotReadyToMerge: mockWhyNotReady,
   }),
   workProductService: () => ({
+    listForIssue: vi.fn(async () => [
+      {
+        id: "preview-wp-62",
+        companyId,
+        issueId: "issue-1",
+        type: "preview_url",
+        provider: "firebase",
+        status: "ready_for_review",
+        reviewState: "none",
+        isPrimary: true,
+        healthStatus: "unknown",
+        title: "PR 62 admin preview",
+        url: "https://synctech-platform-admin--pr-62-a85n35zs.web.app",
+        metadata: {
+          qaAuthHandoff: {
+            method: "email_magic_link",
+            email: "darie@synctech.dev",
+            note: "Use only the app-generated sign-in link/code; coordinate mailbox retrieval with parent/SyOps.",
+          },
+        },
+        projectId: null,
+        executionWorkspaceId: null,
+        runtimeServiceId: null,
+        externalId: null,
+        summary: null,
+        createdByRunId: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    ]),
     getById: vi.fn(async (id: string) => (id === wpId ? { ...storedWp } : null)),
     update: vi.fn(async (_id: string, patch: Record<string, unknown>) => ({
       ...storedWp,
@@ -230,4 +276,32 @@ describe("PR phase routes — actor/role gating", () => {
       expect([200, 409]).toContain(res.status);
     });
   }
+
+  it("wakes OpenClaw generic-qa when review approval advances a PR to QA and a preview URL exists", async () => {
+    mockApply.mockResolvedValueOnce({
+      workProductId: wpId,
+      state: { ...(storedWp.metadata as any).prPhase, phase: "qa", reviewState: "approved", qaState: "pending" },
+      effects: [{ kind: "request_agent_action", phase: "qa", note: "Review approved; QA + proof required." }],
+      changed: true,
+    });
+    const app = await createApp();
+    const res = await request(app)
+      .post(`/api/work-products/${wpId}/pr-phase/events`)
+      .send({ kind: "review_approved" });
+
+    expect(res.status).toBe(200);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(mockWakeup).toHaveBeenCalledWith("paperclip-generic-qa", expect.objectContaining({
+      reason: "preview_url_ready",
+      payload: expect.objectContaining({
+        previewUrl: "https://synctech-platform-admin--pr-62-a85n35zs.web.app",
+        workProductId: "preview-wp-62",
+        prWorkProductId: wpId,
+        qaAuthHandoff: expect.objectContaining({
+          method: "email_magic_link",
+          email: "darie@synctech.dev",
+        }),
+      }),
+    }));
+  });
 });
