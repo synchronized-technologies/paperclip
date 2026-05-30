@@ -1279,6 +1279,12 @@ export function issueRoutes(
     return null;
   }
 
+  async function existingHeartbeatRunIdForCompany(runId: string | null | undefined, companyId: string) {
+    if (!runId || !z.string().uuid().safeParse(runId).success) return null;
+    const run = await heartbeat.getRun(runId);
+    return run?.companyId === companyId ? runId : null;
+  }
+
   async function hasActiveCheckoutManagementOverride(
     actorAgentId: string,
     companyId: string,
@@ -4602,12 +4608,13 @@ export function issueRoutes(
     }
 
     const actor = getActorInfo(req);
-    const agentSourceRunId = req.actor.type === "agent" ? requireAgentRunId(req, res) : null;
-    if (req.actor.type === "agent" && !agentSourceRunId) return;
+    const sourceRunId = req.actor.type === "agent"
+      ? await existingHeartbeatRunIdForCompany(req.actor.runId, issue.companyId)
+      : req.body.sourceRunId ?? null;
 
     const interaction = await issueThreadInteractionService(db).create(issue, {
       ...req.body,
-      sourceRunId: req.actor.type === "agent" ? agentSourceRunId : req.body.sourceRunId ?? null,
+      sourceRunId,
     }, {
       agentId: actor.agentId,
       userId: actor.actorType === "user" ? actor.actorId : null,

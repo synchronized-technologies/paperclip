@@ -22,6 +22,7 @@ const mockInteractionService = vi.hoisted(() => ({
 }));
 
 const mockHeartbeatService = vi.hoisted(() => ({
+  getRun: vi.fn(),
   wakeup: vi.fn(async () => undefined),
 }));
 
@@ -158,6 +159,7 @@ describe.sequential("issue thread interaction routes", () => {
     mockIssueService.getById.mockResolvedValue(createIssue());
     mockInteractionService.listForIssue.mockResolvedValue([]);
     mockInteractionService.expireRequestConfirmationsSupersededByHistoricalComments.mockResolvedValue([]);
+    mockHeartbeatService.getRun.mockResolvedValue({ id: "33333333-3333-4333-8333-333333333333", companyId: "company-1" });
     mockInteractionService.create.mockResolvedValue({
       id: "interaction-1",
       companyId: "company-1",
@@ -706,12 +708,12 @@ describe.sequential("issue thread interaction routes", () => {
     expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
   });
 
-  it("allows agent-authored interaction creation and stamps the active run id", async () => {
+  it("allows agent-authored interaction creation and stamps an existing active run id", async () => {
     const app = await createApp({
       type: "agent",
       agentId: CREATED_AGENT_ID,
       companyId: "company-1",
-      runId: "run-1",
+      runId: "33333333-3333-4333-8333-333333333333",
     });
 
     const res = await request(app)
@@ -731,7 +733,48 @@ describe.sequential("issue thread interaction routes", () => {
       expect.objectContaining({
         kind: "suggest_tasks",
         idempotencyKey: "interaction:task-1",
-        sourceRunId: "run-1",
+        sourceRunId: "33333333-3333-4333-8333-333333333333",
+      }),
+      {
+        agentId: CREATED_AGENT_ID,
+        userId: null,
+      },
+    );
+  });
+
+  it("allows scheduled agent interaction creation without a heartbeat run source id", async () => {
+    mockHeartbeatService.getRun.mockResolvedValue(null);
+    const app = await createApp({
+      type: "agent",
+      agentId: CREATED_AGENT_ID,
+      companyId: "company-1",
+      runId: "paperclip-pr-orchestrator:1779394734",
+    });
+
+    const res = await request(app)
+      .post("/api/issues/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/interactions")
+      .send({
+        kind: "request_confirmation",
+        idempotencyKey: "paperclip-pr:ready-to-merge:https://github.com/paperclipai/paperclip/pull/1",
+        title: "Ready to merge PAP-1714",
+        payload: {
+          version: 1,
+          prompt: "Review and QA proof are complete. Is this PR ready to merge?",
+          target: {
+            type: "custom",
+            key: "pr-ready-to-merge",
+            href: "https://github.com/paperclipai/paperclip/pull/1",
+          },
+        },
+      });
+
+    expect(res.status).toBe(201);
+    expect(mockHeartbeatService.getRun).not.toHaveBeenCalled();
+    expect(mockInteractionService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }),
+      expect.objectContaining({
+        kind: "request_confirmation",
+        sourceRunId: null,
       }),
       {
         agentId: CREATED_AGENT_ID,

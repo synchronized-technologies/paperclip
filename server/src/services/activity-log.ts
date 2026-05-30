@@ -62,6 +62,20 @@ export interface LogActivityInput {
   details?: Record<string, unknown> | null;
 }
 
+function normalizeActivityRunId(runId: string | null | undefined): string | null {
+  if (!runId) return null;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(runId)
+    ? runId
+    : null;
+}
+
+function isActivityRunForeignKeyError(error: unknown): boolean {
+  const err = error as { code?: unknown; constraint?: unknown; detail?: unknown; message?: unknown } | null;
+  if (!err || err.code !== "23503") return false;
+  const haystack = `${String(err.constraint ?? "")}\n${String(err.detail ?? "")}\n${String(err.message ?? "")}`;
+  return haystack.includes("activity_log_run_id") || haystack.includes("activity_log") && haystack.includes("run_id");
+}
+
 export async function logActivity(db: Db, input: LogActivityInput) {
   const currentUserRedactionOptions = {
     enabled: (await instanceSettingsService(db).getGeneral()).censorUsernameInLogs,
@@ -70,7 +84,8 @@ export async function logActivity(db: Db, input: LogActivityInput) {
   const redactedDetails = sanitizedDetails
     ? redactCurrentUserValue(sanitizedDetails, currentUserRedactionOptions)
     : null;
-  await db.insert(activityLog).values({
+  let persistedRunId = normalizeActivityRunId(input.runId ?? null);
+  const insertActivity = (runId: string | null) => db.insert(activityLog).values({
     companyId: input.companyId,
     actorType: input.actorType,
     actorId: input.actorId,
@@ -78,9 +93,21 @@ export async function logActivity(db: Db, input: LogActivityInput) {
     entityType: input.entityType,
     entityId: input.entityId,
     agentId: input.agentId ?? null,
-    runId: input.runId ?? null,
+    runId,
     details: redactedDetails,
   });
+
+  try {
+    await insertActivity(persistedRunId);
+  } catch (error) {
+    if (!persistedRunId || !isActivityRunForeignKeyError(error)) throw error;
+    logger.warn(
+      { runId: persistedRunId, action: input.action, entityType: input.entityType, entityId: input.entityId },
+      "activity log run id did not reference a heartbeat run; recording activity without run link",
+    );
+    persistedRunId = null;
+    await insertActivity(null);
+  }
 
   publishLiveEvent({
     companyId: input.companyId,
@@ -92,7 +119,7 @@ export async function logActivity(db: Db, input: LogActivityInput) {
       entityType: input.entityType,
       entityId: input.entityId,
       agentId: input.agentId ?? null,
-      runId: input.runId ?? null,
+      runId: persistedRunId,
       details: redactedDetails,
     },
   });
